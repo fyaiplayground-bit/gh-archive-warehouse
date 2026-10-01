@@ -1,0 +1,94 @@
+GH Archive exploration — hour 2014-06-01-15
+============================================================
+Total events: 11,126
+Unreadable lines: 0
+
+1) EVENT TYPES (most common first)
+   PushEvent                            6,222   55.9%
+   CreateEvent                          1,182   10.6%
+   WatchEvent                             857    7.7%
+   IssueCommentEvent                      841    7.6%
+   IssuesEvent                            502    4.5%
+   PullRequestEvent                       480    4.3%
+   DeleteEvent                            393    3.5%
+   ForkEvent                              248    2.2%
+   GollumEvent                            139    1.2%
+   PullRequestReviewCommentEvent           86    0.8%
+   CommitCommentEvent                      68    0.6%
+   MemberEvent                             50    0.4%
+   ReleaseEvent                            34    0.3%
+   PublicEvent                             13    0.1%
+   TeamAddEvent                            11    0.1%
+
+2) TOP-LEVEL FIELDS (share of events that have them)
+   100% = on every event -> dimension candidate
+   created_at                       100.0%
+   public                           100.0%
+   type                             100.0%
+   url                              100.0%
+   actor                            100.0%
+   actor_attributes                 100.0%
+   repository                        99.9%
+   payload                           99.9%
+
+3) PAYLOAD FIELDS BY EVENT TYPE
+   [PushEvent]  (6,222 events)
+      shas                         list[list]     100.0%
+      size                         int            100.0%
+      ref                          str            100.0%
+      head                         str            100.0%
+
+   [CreateEvent]  (1,182 events)
+      ref                          str            100.0%
+      ref_type                     str            100.0%
+      master_branch                str            100.0%
+      description                  str            100.0%
+      pusher_type                  str            100.0%
+
+   [WatchEvent]  (857 events)
+      action                       str            100.0%
+
+   [IssueCommentEvent]  (841 events)
+      issue_id                     int            100.0%
+      comment_id                   int            100.0%
+
+   [IssuesEvent]  (502 events)
+      action                       str            100.0%
+      issue                        int            100.0%
+      number                       int            100.0%
+
+   [PullRequestEvent]  (480 events)
+      action                       str            100.0%
+      number                       int            100.0%
+      pull_request                 dict           100.0%
+
+   [DeleteEvent]  (393 events)
+      ref                          str            100.0%
+      ref_type                     str            100.0%
+      pusher_type                  str            100.0%
+
+   [ForkEvent]  (248 events)
+
+   [GollumEvent]  (139 events)
+      pages                        list[dict]     100.0%
+
+   [PullRequestReviewCommentEvent]  (86 events)
+      comment                      dict           100.0%
+
+   [CommitCommentEvent]  (68 events)
+      commit                       str            100.0%
+      comment_id                   int            100.0%
+
+   [MemberEvent]  (50 events)
+      member                       dict           100.0%
+      action                       str            100.0%
+
+   [ReleaseEvent]  (34 events)
+      action                       str            100.0%
+      release                      dict           100.0%
+
+   [PublicEvent]  (13 events)
+
+   [TeamAddEvent]  (11 events)
+      team                         dict           100.0%
+      repository                   dict           100.0%

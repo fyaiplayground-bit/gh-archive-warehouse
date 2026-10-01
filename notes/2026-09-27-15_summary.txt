@@ -1,0 +1,111 @@
+GH Archive exploration — hour 2026-09-27-15
+============================================================
+Total events: 125,787
+Unreadable lines: 0
+
+1) EVENT TYPES (most common first)
+   PushEvent                          104,528   83.1%
+   CreateEvent                         15,159   12.1%
+   DeleteEvent                          4,355    3.5%
+   PullRequestEvent                       657    0.5%
+   IssueCommentEvent                      375    0.3%
+   IssuesEvent                            247    0.2%
+   PullRequestReviewEvent                 127    0.1%
+   WatchEvent                             124    0.1%
+   PullRequestReviewCommentEvent          102    0.1%
+   ReleaseEvent                            60    0.0%
+   ForkEvent                               36    0.0%
+   MemberEvent                              6    0.0%
+   CommitCommentEvent                       5    0.0%
+   PublicEvent                              4    0.0%
+   DiscussionEvent                          2    0.0%
+
+2) TOP-LEVEL FIELDS (share of events that have them)
+   100% = on every event -> dimension candidate
+   id                               100.0%
+   type                             100.0%
+   actor                            100.0%
+   repo                             100.0%
+   payload                          100.0%
+   public                           100.0%
+   created_at                       100.0%
+   org                                9.4%
+
+3) PAYLOAD FIELDS BY EVENT TYPE
+   [PushEvent]  (104,528 events)
+      repository_id                int            100.0%
+      push_id                      int            100.0%
+      ref                          str            100.0%
+      head                         str            100.0%
+      before                       str            100.0%
+
+   [CreateEvent]  (15,159 events)
+      ref                          str            100.0%
+      ref_type                     str            100.0%
+      full_ref                     str            100.0%
+      master_branch                str            100.0%
+      description                  str            100.0%
+      pusher_type                  str            100.0%
+
+   [DeleteEvent]  (4,355 events)
+      ref                          str            100.0%
+      ref_type                     str            100.0%
+      full_ref                     str            100.0%
+      pusher_type                  str            100.0%
+
+   [PullRequestEvent]  (657 events)
+      action                       str            100.0%
+      number                       int            100.0%
+      pull_request                 dict           100.0%
+      label                        dict            18.7%
+      labels                       list[dict]      18.7%
+      assignee                     dict             1.1%
+      assignees                    list[dict]       1.1%
+
+   [IssueCommentEvent]  (375 events)
+      action                       str            100.0%
+      issue                        dict           100.0%
+      comment                      dict           100.0%
+
+   [IssuesEvent]  (247 events)
+      action                       str            100.0%
+      issue                        dict           100.0%
+      label                        dict            43.7%
+      labels                       list[dict]      43.7%
+      assignee                     dict             5.3%
+      assignees                    list[dict]       5.3%
+
+   [PullRequestReviewEvent]  (127 events)
+      review                       dict           100.0%
+      pull_request                 dict           100.0%
+      action                       str            100.0%
+
+   [WatchEvent]  (124 events)
+      action                       str            100.0%
+
+   [PullRequestReviewCommentEvent]  (102 events)
+      action                       str            100.0%
+      comment                      dict           100.0%
+      pull_request                 dict           100.0%
+
+   [ReleaseEvent]  (60 events)
+      action                       str            100.0%
+      release                      dict           100.0%
+
+   [ForkEvent]  (36 events)
+      action                       str            100.0%
+      forkee                       dict           100.0%
+
+   [MemberEvent]  (6 events)
+      member                       dict           100.0%
+      action                       str            100.0%
+
+   [CommitCommentEvent]  (5 events)
+      action                       str            100.0%
+      comment                      dict           100.0%
+
+   [PublicEvent]  (4 events)
+
+   [DiscussionEvent]  (2 events)
+      action                       str            100.0%
+      discussion                   dict           100.0%

@@ -1,0 +1,1179 @@
+{
+  "IssueCommentEvent": {
+    "id": "15858100753",
+    "type": "IssueCommentEvent",
+    "actor": {
+      "id": 282100670,
+      "login": "scribe-dandelion-cult",
+      "display_login": "scribe-dandelion-cult",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/scribe-dandelion-cult",
+      "avatar_url": "https://avatars.githubusercontent.com/u/282100670?"
+    },
+    "repo": {
+      "id": 1163629064,
+      "name": "karmaterminal/openclaw",
+      "url": "https://api.github.com/repos/karmaterminal/openclaw"
+    },
+    "payload": {
+      "action": "created",
+      "issue": {
+        "url": "https://api.github.com/repos/karmaterminal/openclaw/issues/1401",
+        "repository_url": "https://api.github.com/repos/karmaterminal/openclaw",
+        "labels_url": "https://api.github.com/repos/karmaterminal/openclaw/issues/1401/labels{/name}",
+        "comments_url": "https://api.github.com/repos/karmaterminal/openclaw/issues/1401/comments",
+        "events_url": "https://api.github.com/repos/karmaterminal/openclaw/issues/1401/events",
+        "html_url": "https://github.com/karmaterminal/openclaw/issues/1401",
+        "id": 5597725203,
+        "node_id": "I_kwDORVuSCM8AAAABTaaCEw",
+        "number": 1401,
+        "title": "Always-on Discord room drains ingress one turn per event; backlog re-emits the same salient reply (\"duplicate posts\")",
+        "user": {
+          "login": "karmafeast",
+          "id": 886771,
+          "node_id": "MDQ6VXNlcjg4Njc3MQ==",
+          "avatar_url": "https://avatars.githubusercontent.com/u/886771?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/karmafeast",
+          "html_url": "https://github.com/karmafeast",
+          "followers_url": "https://api.github.com/users/karmafeast/followers",
+          "following_url": "https://api.github.com/users/karmafeast/following{/other_user}",
+          "gists_url": "https://api.github.com/users/karmafeast/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/karmafeast/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/karmafeast/subscriptions",
+          "organizations_url": "https://api.github.com/users/karmafeast/orgs",
+          "repos_url": "https://api.github.com/users/karmafeast/repos",
+          "events_url": "https://api.github.com/users/karmafeast/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/karmafeast/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "labels": [],
+        "state": "open",
+        "locked": false,
+        "assignees": [],
+        "milestone": null,
+        "comments": 1,
+        "created_at": "2026-09-26T22:08:34Z",
+        "updated_at": "2026-09-27T15:00:00Z",
+        "closed_at": null,
+        "assignee": null,
+        "issue_field_values": [],
+        "type": null,
+        "active_lock_reason": null,
+        "sub_issues_summary": {
+          "total": 0,
+          "completed": 0,
+          "percent_completed": 0
+        },
+        "issue_dependencies_summary": {
+          "blocked_by": 0,
+          "total_blocked_by": 0,
+          "blocking": 0,
+          "total_blocking": 0
+        },
+        "body": "> _Author note: posted via gh CLI auth'd as karmafeast (auth slip); content-author is frond-scribe._\n\n## Symptom\nIn #sprites-of-thornfield the princes post near-identical replies several times, roughly 45–95 s apart. Each copy replies to a **different, older** message. Example from Ronan, 2026-09-26: four \"duplicate-output seed\" posts targeting `1553518379…` → `…524` → `…536` → `…724`, in chronological order, about 50 s apart. Byte-identical pairs:\n- `1553518160190111795` / `1553518379929702411` (Emeric)\n- `1553518235700174962` / `1553518433273122820` (Ronan)\n- `1553512021679411323` / `1553512235232526460` (Ronan)\n\n## Mechanism (byte-read from each seat's `channel_ingress_events`, read-only)\n- Every room message becomes one ingress event. The seat drains them **serially, about one agent turn per event (~50 s)**. The lane key is `channel:1466192485440164011`.\n- When inbound traffic is faster than that, the queue lags. At 21:20Z there were 32 messages in 10 min.\n- A late turn replies to its own stale trigger, but the model answers whatever is most salient in the current transcript. The result is the same answer again, aimed at a different old message.\n- The duplicates and the talk about them are themselves room messages. That feeds every other seat's queue, so this is a positive feedback loop across six seats.\n\nSnapshot at ~21:40Z (pending | oldest pending):\n\n| seat | pending | oldest |\n|---|---|---|\n| cael | 102 | 65 min |\n| emeric | 16 | 6 min |\n| silas | 11 | 4 min |\n| elliott | 10 | 3 min |\n| ronan | 9 | 3 min |\n| rune | 0 | — |\n\n## Not this\n- Not a transport or send retry: three separate runs and three send operations, each correctly routed (Rune's runtime trace, #1400).\n- Not #1399, and not the continuation feature. Per the counterfactual test, removing continuation leaves this unchanged.\n\n## Mitigation in place\nThe stale backlog was dead-lettered on cael (95 rows) and emeric (21 rows): gateway stopped, `sqlite3 .backup` taken, rows moved to `failed` with a `failed_reason`, gateway restarted. figs's standing ask is to flush stale backlogs because \"it's just burn\". A read-only watch alerts the scribe when a seat has ≥30 pending or oldest ≥15 min.\n\n## Wanted (after GATES)\nThe always-on room path needs catch-up semantics when the lane is behind. Two options:\n- coalesce all pending room events for a lane into **one** turn, or\n- skip or supersede events whose conversation has moved on.\n\nEither way, don't spend one model turn per stale ambient message. Evidence of partial coalescing already exists: several rows complete in the same second, so find why that doesn't hold under sustained load.\n\nRelated: #1400 (Ronan triple-send, same class).\n\n🌿 frond-scribe",
+        "reactions": {
+          "url": "https://api.github.com/repos/karmaterminal/openclaw/issues/1401/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "timeline_url": "https://api.github.com/repos/karmaterminal/openclaw/issues/1401/timeline",
+        "performed_via_github_app": null,
+        "state_reason": null,
+        "pinned_comment": null
+      },
+      "comment": {
+        "url": "https://api.github.com/repos/karmaterminal/openclaw/issues/comments/5856982854",
+        "html_url": "https://github.com/karmaterminal/openclaw/issues/1401#issuecomment-5856982854",
+        "issue_url": "https://api.github.com/repos/karmaterminal/openclaw/issues/1401",
+        "id": 5856982854,
+        "node_id": "IC_kwDORVuSCM8AAAABXRp3Rg",
+        "user": {
+          "login": "scribe-dandelion-cult",
+          "id": 282100670,
+          "node_id": "U_kgDOENCDvg",
+          "avatar_url": "https://avatars.githubusercontent.com/u/282100670?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/scribe-dandelion-cult",
+          "html_url": "https://github.com/scribe-dandelion-cult",
+          "followers_url": "https://api.github.com/users/scribe-dandelion-cult/followers",
+          "following_url": "https://api.github.com/users/scribe-dandelion-cult/following{/other_user}",
+          "gists_url": "https://api.github.com/users/scribe-dandelion-cult/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/scribe-dandelion-cult/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/scribe-dandelion-cult/subscriptions",
+          "organizations_url": "https://api.github.com/users/scribe-dandelion-cult/orgs",
+          "repos_url": "https://api.github.com/users/scribe-dandelion-cult/repos",
+          "events_url": "https://api.github.com/users/scribe-dandelion-cult/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/scribe-dandelion-cult/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "created_at": "2026-09-27T15:00:00Z",
+        "updated_at": "2026-09-27T15:00:00Z",
+        "body": "**Field evidence, cael, 2026-09-27 ~14:50Z** (deploy `1293b63`, the 09-25 composite that carries #121204/#124337).\n\n- Silas posted a review as about 32 separate room messages. On cael the ingress drain gave **each room message its own full model turn, serially**, about one every 45 s (journal: `code-mode: cataloged … → recorded message-tool-only run outcome`, repeating). Almost every turn ended message-tool-only (a react or no reply).\n- 37 pending with the oldest about 10 min meant roughly 30 min of paid turns on already-read content. figs's newer messages were queued behind it, which is the \"answering old messages / accumulation\" look. The other princes drained the same burst within minutes.\n- The unit was otherwise healthy: 0 restarts, no `isError`, no cooldown/quota loop, no orphan settlements (`requester settle wake failed` = 0).\n\nAction (figs standing ask, \"flush, it's just burn\"): stopped the gateway, took a backup (`openclaw.sqlite.bak-backlog-flush-20260927T145757Z`), and dead-lettered the 32 pending rows older than 5 min, **excluding figs's own messages**. They are resubmittable via `openclaw channels dead-letters`. Gateway started 14:58Z; it's draining the remaining 5, figs's included.\n\nThis is the room-burst shape this issue describes: no per-lane coalescing of room chatter, so N messages cost N turns. The composite's stale-backlog cures narrow it but don't close it.\n\nAlso noted: two `interrupted` rows in `session_pending_inputs` from continuation delegates accepted 2026-09-07 and 2026-09-13 (`continuation-delegate-a8599ff3…`, `…0fa54a46…`). They're inert; recording them for the continuation recovery path.\n\n> _Author note: content-author is frond-scribe._\n",
+        "pin": null,
+        "reactions": {
+          "url": "https://api.github.com/repos/karmaterminal/openclaw/issues/comments/5856982854/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "performed_via_github_app": null,
+        "minimized": null
+      }
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:00Z",
+    "org": {
+      "id": 25347774,
+      "login": "karmaterminal",
+      "gravatar_id": "",
+      "url": "https://api.github.com/orgs/karmaterminal",
+      "avatar_url": "https://avatars.githubusercontent.com/u/25347774?"
+    }
+  },
+  "PushEvent": {
+    "id": "22308051046",
+    "type": "PushEvent",
+    "actor": {
+      "id": 108553330,
+      "login": "LizardByte-bot",
+      "display_login": "LizardByte-bot",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/LizardByte-bot",
+      "avatar_url": "https://avatars.githubusercontent.com/u/108553330?"
+    },
+    "repo": {
+      "id": 1383599742,
+      "name": "LizardByte/PresetDB",
+      "url": "https://api.github.com/repos/LizardByte/PresetDB"
+    },
+    "payload": {
+      "repository_id": 1383599742,
+      "push_id": 44726802349,
+      "ref": "refs/heads/database",
+      "head": "e30efdc4ef9030c553398ea09f1631d73b489095",
+      "before": "187e99d4917e29d8e9bf5c7183b1567195dda9b4"
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:00Z",
+    "org": {
+      "id": 84790584,
+      "login": "LizardByte",
+      "gravatar_id": "",
+      "url": "https://api.github.com/orgs/LizardByte",
+      "avatar_url": "https://avatars.githubusercontent.com/u/84790584?"
+    }
+  },
+  "CreateEvent": {
+    "id": "22308051055",
+    "type": "CreateEvent",
+    "actor": {
+      "id": 349765,
+      "login": "rlorenzo",
+      "display_login": "rlorenzo",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/rlorenzo",
+      "avatar_url": "https://avatars.githubusercontent.com/u/349765?"
+    },
+    "repo": {
+      "id": 1390374818,
+      "name": "rlorenzo/mago-wordpress",
+      "url": "https://api.github.com/repos/rlorenzo/mago-wordpress"
+    },
+    "payload": {
+      "ref": "chore/consolidate",
+      "ref_type": "branch",
+      "full_ref": "refs/heads/chore/consolidate",
+      "master_branch": "main",
+      "description": "Mago extension for WordPress: WPCS-equivalent linter rules and analyzer plugins",
+      "pusher_type": "user"
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:00Z"
+  },
+  "DeleteEvent": {
+    "id": "22308051279",
+    "type": "DeleteEvent",
+    "actor": {
+      "id": 17168367,
+      "login": "losolio",
+      "display_login": "losolio",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/losolio",
+      "avatar_url": "https://avatars.githubusercontent.com/u/17168367?"
+    },
+    "repo": {
+      "id": 1315483896,
+      "name": "losol/historia",
+      "url": "https://api.github.com/repos/losol/historia"
+    },
+    "payload": {
+      "ref": "chore/remove-header-theme",
+      "ref_type": "branch",
+      "full_ref": "refs/heads/chore/remove-header-theme",
+      "pusher_type": "user"
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:00Z",
+    "org": {
+      "id": 5166597,
+      "login": "losol",
+      "gravatar_id": "",
+      "url": "https://api.github.com/orgs/losol",
+      "avatar_url": "https://avatars.githubusercontent.com/u/5166597?"
+    }
+  },
+  "PullRequestEvent": {
+    "id": "15858101246",
+    "type": "PullRequestEvent",
+    "actor": {
+      "id": 49699333,
+      "login": "dependabot[bot]",
+      "display_login": "dependabot",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/dependabot[bot]",
+      "avatar_url": "https://avatars.githubusercontent.com/u/49699333?"
+    },
+    "repo": {
+      "id": 1022611643,
+      "name": "adcontextprotocol/adcp",
+      "url": "https://api.github.com/repos/adcontextprotocol/adcp"
+    },
+    "payload": {
+      "action": "labeled",
+      "number": 7703,
+      "pull_request": {
+        "url": "https://api.github.com/repos/adcontextprotocol/adcp/pulls/7703",
+        "id": 4654662957,
+        "number": 7703,
+        "head": {
+          "ref": "dependabot/npm_and_yarn/main/dotenv-18.0.3",
+          "sha": "586a98d587f27fcc4cb25f0233036b9e88822402",
+          "repo": {
+            "id": 1022611643,
+            "url": "https://api.github.com/repos/adcontextprotocol/adcp",
+            "name": "adcp"
+          }
+        },
+        "base": {
+          "ref": "main",
+          "sha": "26432e682bef2474b3b6f3baafadb2f6b1ce542d",
+          "repo": {
+            "id": 1022611643,
+            "url": "https://api.github.com/repos/adcontextprotocol/adcp",
+            "name": "adcp"
+          }
+        }
+      },
+      "label": {
+        "id": 10433366241,
+        "node_id": "LA_kwDOPPPQu88AAAACbeCI4Q",
+        "url": "https://api.github.com/repos/adcontextprotocol/adcp/labels/javascript",
+        "name": "javascript",
+        "color": "168700",
+        "default": false,
+        "description": "Pull requests that update javascript code",
+        "archived_at": null,
+        "archived_by": null
+      },
+      "labels": [
+        {
+          "id": 10433337313,
+          "node_id": "LA_kwDOPPPQu88AAAACbeAX4Q",
+          "url": "https://api.github.com/repos/adcontextprotocol/adcp/labels/dependencies",
+          "name": "dependencies",
+          "color": "0366d6",
+          "default": false,
+          "description": "Pull requests that update a dependency file",
+          "archived_at": null,
+          "archived_by": null
+        },
+        {
+          "id": 10433366241,
+          "node_id": "LA_kwDOPPPQu88AAAACbeCI4Q",
+          "url": "https://api.github.com/repos/adcontextprotocol/adcp/labels/javascript",
+          "name": "javascript",
+          "color": "168700",
+          "default": false,
+          "description": "Pull requests that update javascript code",
+          "archived_at": null,
+          "archived_by": null
+        }
+      ]
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:01Z",
+    "org": {
+      "id": 221690821,
+      "login": "adcontextprotocol",
+      "gravatar_id": "",
+      "url": "https://api.github.com/orgs/adcontextprotocol",
+      "avatar_url": "https://avatars.githubusercontent.com/u/221690821?"
+    }
+  },
+  "PullRequestReviewEvent": {
+    "id": "15858103990",
+    "type": "PullRequestReviewEvent",
+    "actor": {
+      "id": 29139614,
+      "login": "renovate[bot]",
+      "display_login": "renovate",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/renovate[bot]",
+      "avatar_url": "https://avatars.githubusercontent.com/u/29139614?"
+    },
+    "repo": {
+      "id": 233593348,
+      "name": "SAP/cloud-sdk-js",
+      "url": "https://api.github.com/repos/SAP/cloud-sdk-js"
+    },
+    "payload": {
+      "review": {
+        "id": 5298692289,
+        "node_id": "PRR_kwDODexaBM8AAAABO9OgwQ",
+        "user": {
+          "login": "renovate-approve[bot]",
+          "id": 34475974,
+          "node_id": "MDM6Qm90MzQ0NzU5NzQ=",
+          "avatar_url": "https://avatars.githubusercontent.com/in/7394?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/renovate-approve%5Bbot%5D",
+          "html_url": "https://github.com/apps/renovate-approve",
+          "followers_url": "https://api.github.com/users/renovate-approve%5Bbot%5D/followers",
+          "following_url": "https://api.github.com/users/renovate-approve%5Bbot%5D/following{/other_user}",
+          "gists_url": "https://api.github.com/users/renovate-approve%5Bbot%5D/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/renovate-approve%5Bbot%5D/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/renovate-approve%5Bbot%5D/subscriptions",
+          "organizations_url": "https://api.github.com/users/renovate-approve%5Bbot%5D/orgs",
+          "repos_url": "https://api.github.com/users/renovate-approve%5Bbot%5D/repos",
+          "events_url": "https://api.github.com/users/renovate-approve%5Bbot%5D/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/renovate-approve%5Bbot%5D/received_events",
+          "type": "Bot",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "body": null,
+        "commit_id": "dcabf70410c723930e004424d2832f6a0304466b",
+        "state": "dismissed",
+        "html_url": "https://github.com/SAP/cloud-sdk-js/pull/6984#pullrequestreview-5298692289",
+        "pull_request_url": "https://api.github.com/repos/SAP/cloud-sdk-js/pulls/6984",
+        "_links": {
+          "html": {
+            "href": "https://github.com/SAP/cloud-sdk-js/pull/6984#pullrequestreview-5298692289"
+          },
+          "pull_request": {
+            "href": "https://api.github.com/repos/SAP/cloud-sdk-js/pulls/6984"
+          }
+        },
+        "submitted_at": "2026-09-24T01:35:04Z",
+        "updated_at": "2026-09-27T15:00:06Z"
+      },
+      "pull_request": {
+        "url": "https://api.github.com/repos/SAP/cloud-sdk-js/pulls/6984",
+        "id": 4585010127,
+        "number": 6984,
+        "head": {
+          "ref": "renovate/rolldown-1.x",
+          "sha": "95d19c40392bc811d7f4f73247c7d3a5f125ace3",
+          "repo": {
+            "id": 233593348,
+            "url": "https://api.github.com/repos/SAP/cloud-sdk-js",
+            "name": "cloud-sdk-js"
+          }
+        },
+        "base": {
+          "ref": "main",
+          "sha": "fcadb947bec69b116f1a97955776014985fe5b69",
+          "repo": {
+            "id": 233593348,
+            "url": "https://api.github.com/repos/SAP/cloud-sdk-js",
+            "name": "cloud-sdk-js"
+          }
+        }
+      },
+      "action": "dismissed"
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:06Z",
+    "org": {
+      "id": 2531208,
+      "login": "SAP",
+      "gravatar_id": "",
+      "url": "https://api.github.com/orgs/SAP",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2531208?"
+    }
+  },
+  "WatchEvent": {
+    "id": "15858108668",
+    "type": "WatchEvent",
+    "actor": {
+      "id": 162935453,
+      "login": "wxffffff",
+      "display_login": "wxffffff",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/wxffffff",
+      "avatar_url": "https://avatars.githubusercontent.com/u/162935453?"
+    },
+    "repo": {
+      "id": 817326197,
+      "name": "screenpipe/screenpipe",
+      "url": "https://api.github.com/repos/screenpipe/screenpipe"
+    },
+    "payload": {
+      "action": "started"
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:13Z",
+    "org": {
+      "id": 259178917,
+      "login": "screenpipe",
+      "gravatar_id": "",
+      "url": "https://api.github.com/orgs/screenpipe",
+      "avatar_url": "https://avatars.githubusercontent.com/u/259178917?"
+    }
+  },
+  "IssuesEvent": {
+    "id": "15858113903",
+    "type": "IssuesEvent",
+    "actor": {
+      "id": 118310809,
+      "login": "hrusten",
+      "display_login": "hrusten",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/hrusten",
+      "avatar_url": "https://avatars.githubusercontent.com/u/118310809?"
+    },
+    "repo": {
+      "id": 1195365861,
+      "name": "YuriPlanet/vera20k",
+      "url": "https://api.github.com/repos/YuriPlanet/vera20k"
+    },
+    "payload": {
+      "action": "labeled",
+      "issue": {
+        "url": "https://api.github.com/repos/YuriPlanet/vera20k/issues/704",
+        "repository_url": "https://api.github.com/repos/YuriPlanet/vera20k",
+        "labels_url": "https://api.github.com/repos/YuriPlanet/vera20k/issues/704/labels{/name}",
+        "comments_url": "https://api.github.com/repos/YuriPlanet/vera20k/issues/704/comments",
+        "events_url": "https://api.github.com/repos/YuriPlanet/vera20k/issues/704/events",
+        "html_url": "https://github.com/YuriPlanet/vera20k/issues/704",
+        "id": 5603677791,
+        "node_id": "I_kwDORz_V5c8AAAABTgFWXw",
+        "number": 704,
+        "title": "Object types are looked up two ways, with a silent name fallback",
+        "user": {
+          "login": "hrusten",
+          "id": 118310809,
+          "node_id": "U_kgDOBw1HmQ",
+          "avatar_url": "https://avatars.githubusercontent.com/u/118310809?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/hrusten",
+          "html_url": "https://github.com/hrusten",
+          "followers_url": "https://api.github.com/users/hrusten/followers",
+          "following_url": "https://api.github.com/users/hrusten/following{/other_user}",
+          "gists_url": "https://api.github.com/users/hrusten/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/hrusten/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/hrusten/subscriptions",
+          "organizations_url": "https://api.github.com/users/hrusten/orgs",
+          "repos_url": "https://api.github.com/users/hrusten/repos",
+          "events_url": "https://api.github.com/users/hrusten/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/hrusten/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "labels": [
+          {
+            "id": 12402197308,
+            "node_id": "LA_kwDORz_V5c8AAAAC4zqDPA",
+            "url": "https://api.github.com/repos/YuriPlanet/vera20k/labels/refactor",
+            "name": "refactor",
+            "color": "5319E7",
+            "default": false,
+            "description": "Refactoring found during other work: duplicates, dead code, development drag",
+            "archived_at": null,
+            "archived_by": null
+          }
+        ],
+        "state": "open",
+        "locked": false,
+        "assignees": [],
+        "milestone": null,
+        "comments": 0,
+        "created_at": "2026-09-27T15:00:22Z",
+        "updated_at": "2026-09-27T15:00:22Z",
+        "closed_at": null,
+        "assignee": null,
+        "issue_field_values": [],
+        "type": null,
+        "active_lock_reason": null,
+        "sub_issues_summary": {
+          "total": 0,
+          "completed": 0,
+          "percent_completed": 0
+        },
+        "issue_dependencies_summary": {
+          "blocked_by": 0,
+          "total_blocked_by": 0,
+          "blocking": 0,
+          "total_blocking": 0
+        },
+        "body": "**Where:** `TypeHandleTable::object` (`src/sim/type_handle_table.rs:68-79`) falls back to a by-name lookup while the table is empty (`:76`); `Simulation::object_type` (`src/sim/world/mod.rs:2903-2914`) documents it. Non-test `src/sim` has about 186 `object_type(...)` lookups beside about 180 `rules.object(interner.resolve(...))` name lookups (e.g. `src/sim/world/command_schedule.rs:158`, `:172`).\n\n**Problem:** The two paths agree only if every type ID was interned before the table was built; afterwards a newly interned ID misses in the table but resolves by name. #558 made headless build the table, so production no longer reaches the fallback, but both lookup paths and the fallback remain.\n\n**Drag:** Each new lookup site picks a path ad hoc, and fixtures that skip the build exercise a lookup production doesn't use.\n\n**Related:** #593\n\n---\n_Migrated from the September 2026 refactor audits. Checked by reading the code at 2687b5bc, not by running it; the locations may be incomplete. Verify before acting; how to fix it is up to whoever takes it._",
+        "reactions": {
+          "url": "https://api.github.com/repos/YuriPlanet/vera20k/issues/704/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "timeline_url": "https://api.github.com/repos/YuriPlanet/vera20k/issues/704/timeline",
+        "performed_via_github_app": null,
+        "state_reason": null,
+        "pinned_comment": null
+      },
+      "label": {
+        "id": 12402197308,
+        "node_id": "LA_kwDORz_V5c8AAAAC4zqDPA",
+        "url": "https://api.github.com/repos/YuriPlanet/vera20k/labels/refactor",
+        "name": "refactor",
+        "color": "5319E7",
+        "default": false,
+        "description": "Refactoring found during other work: duplicates, dead code, development drag",
+        "archived_at": null,
+        "archived_by": null
+      },
+      "labels": [
+        {
+          "id": 12402197308,
+          "node_id": "LA_kwDORz_V5c8AAAAC4zqDPA",
+          "url": "https://api.github.com/repos/YuriPlanet/vera20k/labels/refactor",
+          "name": "refactor",
+          "color": "5319E7",
+          "default": false,
+          "description": "Refactoring found during other work: duplicates, dead code, development drag",
+          "archived_at": null,
+          "archived_by": null
+        }
+      ]
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:23Z",
+    "org": {
+      "id": 274487240,
+      "login": "YuriPlanet",
+      "gravatar_id": "",
+      "url": "https://api.github.com/orgs/YuriPlanet",
+      "avatar_url": "https://avatars.githubusercontent.com/u/274487240?"
+    }
+  },
+  "ReleaseEvent": {
+    "id": "15858117975",
+    "type": "ReleaseEvent",
+    "actor": {
+      "id": 260426354,
+      "login": "Vitia2332",
+      "display_login": "Vitia2332",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Vitia2332",
+      "avatar_url": "https://avatars.githubusercontent.com/u/260426354?"
+    },
+    "repo": {
+      "id": 1153689371,
+      "name": "Vitia2332/files",
+      "url": "https://api.github.com/repos/Vitia2332/files"
+    },
+    "payload": {
+      "action": "published",
+      "release": {
+        "url": "https://api.github.com/repos/Vitia2332/files/releases/397692560",
+        "assets_url": "https://api.github.com/repos/Vitia2332/files/releases/397692560/assets",
+        "upload_url": "https://uploads.github.com/repos/Vitia2332/files/releases/397692560/assets{?name,label}",
+        "html_url": "https://github.com/Vitia2332/files/releases/tag/dataex",
+        "id": 397692560,
+        "author": {
+          "login": "Vitia2332",
+          "id": 260426354,
+          "node_id": "U_kgDOD4XKcg",
+          "avatar_url": "https://avatars.githubusercontent.com/u/260426354?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/Vitia2332",
+          "html_url": "https://github.com/Vitia2332",
+          "followers_url": "https://api.github.com/users/Vitia2332/followers",
+          "following_url": "https://api.github.com/users/Vitia2332/following{/other_user}",
+          "gists_url": "https://api.github.com/users/Vitia2332/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/Vitia2332/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/Vitia2332/subscriptions",
+          "organizations_url": "https://api.github.com/users/Vitia2332/orgs",
+          "repos_url": "https://api.github.com/users/Vitia2332/repos",
+          "events_url": "https://api.github.com/users/Vitia2332/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/Vitia2332/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "node_id": "RE_kwDORMPnG84XtE6Q",
+        "tag_name": "dataex",
+        "target_commitish": "main",
+        "name": "dataex",
+        "draft": false,
+        "immutable": false,
+        "prerelease": false,
+        "created_at": "2026-02-09T15:30:35Z",
+        "updated_at": "2026-09-27T15:00:30Z",
+        "published_at": "2026-09-27T15:00:29Z",
+        "assets": [
+          {
+            "url": "https://api.github.com/repos/Vitia2332/files/releases/assets/593146319",
+            "id": 593146319,
+            "node_id": "RA_kwDORMPnG84jWrHP",
+            "name": "data.zip",
+            "label": "",
+            "uploader": {
+              "login": "Vitia2332",
+              "id": 260426354,
+              "node_id": "U_kgDOD4XKcg",
+              "avatar_url": "https://avatars.githubusercontent.com/u/260426354?v=4",
+              "gravatar_id": "",
+              "url": "https://api.github.com/users/Vitia2332",
+              "html_url": "https://github.com/Vitia2332",
+              "followers_url": "https://api.github.com/users/Vitia2332/followers",
+              "following_url": "https://api.github.com/users/Vitia2332/following{/other_user}",
+              "gists_url": "https://api.github.com/users/Vitia2332/gists{/gist_id}",
+              "starred_url": "https://api.github.com/users/Vitia2332/starred{/owner}{/repo}",
+              "subscriptions_url": "https://api.github.com/users/Vitia2332/subscriptions",
+              "organizations_url": "https://api.github.com/users/Vitia2332/orgs",
+              "repos_url": "https://api.github.com/users/Vitia2332/repos",
+              "events_url": "https://api.github.com/users/Vitia2332/events{/privacy}",
+              "received_events_url": "https://api.github.com/users/Vitia2332/received_events",
+              "type": "User",
+              "user_view_type": "public",
+              "site_admin": false
+            },
+            "content_type": "application/octet-stream",
+            "state": "uploaded",
+            "size": 337598,
+            "digest": "sha256:2e637962f9ff5dea456002822f2728901dc00abd70339614210f00d5453687e3",
+            "download_count": 0,
+            "created_at": "2026-09-27T15:00:30Z",
+            "updated_at": "2026-09-27T15:00:30Z",
+            "browser_download_url": "https://github.com/Vitia2332/files/releases/download/dataex/data.zip"
+          }
+        ],
+        "tarball_url": "https://api.github.com/repos/Vitia2332/files/tarball/dataex",
+        "zipball_url": "https://api.github.com/repos/Vitia2332/files/zipball/dataex",
+        "body": "Automated release",
+        "short_description_html": "<p>Automated release</p>",
+        "is_short_description_html_truncated": false
+      }
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:29Z"
+  },
+  "MemberEvent": {
+    "id": "15858117974",
+    "type": "MemberEvent",
+    "actor": {
+      "id": 208139633,
+      "login": "nouva-ai",
+      "display_login": "nouva-ai",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/nouva-ai",
+      "avatar_url": "https://avatars.githubusercontent.com/u/208139633?"
+    },
+    "repo": {
+      "id": 1390903008,
+      "name": "gadingnst/ledgerlab-scaffold",
+      "url": "https://api.github.com/repos/gadingnst/ledgerlab-scaffold"
+    },
+    "payload": {
+      "member": {
+        "login": "nouva-ai",
+        "id": 208139633,
+        "node_id": "U_kgDODGf1cQ",
+        "avatar_url": "https://avatars.githubusercontent.com/u/208139633?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/nouva-ai",
+        "html_url": "https://github.com/nouva-ai",
+        "followers_url": "https://api.github.com/users/nouva-ai/followers",
+        "following_url": "https://api.github.com/users/nouva-ai/following{/other_user}",
+        "gists_url": "https://api.github.com/users/nouva-ai/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/nouva-ai/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/nouva-ai/subscriptions",
+        "organizations_url": "https://api.github.com/users/nouva-ai/orgs",
+        "repos_url": "https://api.github.com/users/nouva-ai/repos",
+        "events_url": "https://api.github.com/users/nouva-ai/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/nouva-ai/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "action": "added"
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:30Z"
+  },
+  "CommitCommentEvent": {
+    "id": "15858121266",
+    "type": "CommitCommentEvent",
+    "actor": {
+      "id": 41898282,
+      "login": "github-actions[bot]",
+      "display_login": "github-actions",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/github-actions[bot]",
+      "avatar_url": "https://avatars.githubusercontent.com/u/41898282?"
+    },
+    "repo": {
+      "id": 386017669,
+      "name": "iterativv/NostalgiaForInfinity",
+      "url": "https://api.github.com/repos/iterativv/NostalgiaForInfinity"
+    },
+    "payload": {
+      "action": "created",
+      "comment": {
+        "url": "https://api.github.com/repos/iterativv/NostalgiaForInfinity/comments/202273673",
+        "html_url": "https://github.com/iterativv/NostalgiaForInfinity/commit/18c0184adc1d885601c0c053ac92d82ff82782c4#commitcomment-202273673",
+        "id": 202273673,
+        "node_id": "CC_kwDOFwIphc4MDnOJ",
+        "user": {
+          "login": "github-actions[bot]",
+          "id": 41898282,
+          "node_id": "MDM6Qm90NDE4OTgyODI=",
+          "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/github-actions%5Bbot%5D",
+          "html_url": "https://github.com/apps/github-actions",
+          "followers_url": "https://api.github.com/users/github-actions%5Bbot%5D/followers",
+          "following_url": "https://api.github.com/users/github-actions%5Bbot%5D/following{/other_user}",
+          "gists_url": "https://api.github.com/users/github-actions%5Bbot%5D/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/github-actions%5Bbot%5D/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/github-actions%5Bbot%5D/subscriptions",
+          "organizations_url": "https://api.github.com/users/github-actions%5Bbot%5D/orgs",
+          "repos_url": "https://api.github.com/users/github-actions%5Bbot%5D/repos",
+          "events_url": "https://api.github.com/users/github-actions%5Bbot%5D/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/github-actions%5Bbot%5D/received_events",
+          "type": "Bot",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "position": null,
+        "line": null,
+        "path": null,
+        "commit_id": "18c0184adc1d885601c0c053ac92d82ff82782c4",
+        "created_at": "2026-09-27T15:00:36Z",
+        "updated_at": "2026-09-27T15:00:36Z",
+        "body": "## Kucoin - Spot - 20260501-20260601\n\n| | Current | [Previous](https://github.com/iterativv/NostalgiaForInfinity/commit/96ec782ea6f55d939ab7310cf1e3fd453fd1b7c2) | [v17.4.503](https://github.com/iterativv/NostalgiaForInfinity/commit/ad98621a8dd52b84e9460d74dbba2be8cb0fab59) | [v17.4.562](https://github.com/iterativv/NostalgiaForInfinity/commit/ab37283843c3d747ff924ce9f753e9ae28230813) | [v17.5.40](https://github.com/iterativv/NostalgiaForInfinity/commit/ad5b4b98b52cd72932dd11e464fb8ede3663050c) |\n| --: | --: | --: | --: | --: | --: |\n|  Average Duration | 13:42:00 | 13:42:00 | 18:26:00 | 18:26:00 | 18:26:00 |\n|  Market Change | -0.4 % | -0.4 % | -0.22 % | -0.4 % | -0.4 % |\n|  Max Drawdown | 0.0 % | 0.0 % | 0.0 % | 0.0 % | 0.0 % |\n|  Profit Mean | 1.91 % | 1.91 % | 0.99 % | 0.99 % | 0.99 % |\n|  Profit Total | 1.64 % | 1.64 % | 0.64 % | 0.64 % | 0.64 % |\n|  Trades | 6 | 6 | 6 | 6 | 6 |\n|  Win Rate | 100.0 % | 100.0 % | 100.0 % | 100.0 % | 100.0 % |\n\n<details>\n<summary>Detailed Backtest Output (click to see details)</summary>\nResult for strategy NostalgiaForInfinityX8\n                                              \n## BACKTESTING REPORT\n                                               \n\n|       Pair | Trades | Avg Profit % | Tot Profit USDT | Tot Profit % | Avg Duration |  Win  Draw  Loss  Win% |\n|------------:|--------:|--------------:|-----------------:|--------------:|--------------:|------------------------:|\n|   DAG/USDT |      2 |         3.89 |         119.164 |         1.19 |     18:18:00 |    2     0     0   100 |\n|  AAVE/USDT |      1 |         1.93 |          31.836 |         0.32 |      4:05:00 |    1     0     0   100 |\n|  DASH/USDT |      2 |         0.49 |           9.822 |          0.1 |     19:35:00 |    2     0     0   100 |\n|   FIL/USDT |      1 |         0.75 |           3.114 |         0.03 |      2:25:00 |    1     0     0   100 |\n|   ADA/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n| ALEPH/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|  ALGO/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|  ARPA/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|  ATOM/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   AVA/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   BCH/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   BNB/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   BTC/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   BTT/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   CHR/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   CKB/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|  COMP/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|  COTI/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   CRO/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   DGB/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   DIA/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   DOT/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   ETC/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   ETH/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   EWT/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   GRT/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   JST/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   KSM/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|  LINK/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   LTC/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   MLK/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   NEO/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   NIM/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   ONT/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|  ROSE/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   SNX/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   TEL/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   TRX/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   UMA/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   UNI/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   UOS/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|  VELO/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   VET/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   WIN/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   XLM/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   XRP/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   XTZ/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   YFI/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|   ZEC/USDT |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n|      TOTAL |      6 |         1.91 |         163.936 |         1.64 |     13:42:00 |    6     0     0   100 |\n\n                                         \n## LEFT OPEN TRADES REPORT\n                                          \n\n|  Pair | Trades | Avg Profit % | Tot Profit USDT | Tot Profit % | Avg Duration |  Win  Draw  Loss  Win% |\n|-------:|--------:|--------------:|-----------------:|--------------:|--------------:|------------------------:|\n| TOTAL |      0 |          0.0 |           0.000 |          0.0 |         0:00 |    0     0     0     0 |\n\n                                                 \n## ENTER TAG STATS\n                                                  \n\n| Enter Tag | Entries | Avg Profit % | Tot Profit USDT | Tot Profit % |    Avg Duration |  Win  Draw  Loss  Win% |\n|-----------:|---------:|--------------:|-----------------:|--------------:|-----------------:|------------------------:|\n|         5 |       1 |         6.57 |         109.169 |         1.09 |         3:20:00 |    1     0     0   100 |\n|       145 |       1 |         1.93 |          31.836 |         0.32 |         4:05:00 |    1     0     0   100 |\n|        64 |       3 |         0.83 |          15.344 |         0.15 |        12:58:00 |    3     0     0   100 |\n|     6 141 |       1 |         0.44 |           7.587 |         0.08 | 1 day, 11:55:00 |    1     0     0   100 |\n|     TOTAL |       6 |         1.91 |         163.936 |         1.64 |        13:42:00 |    6     0     0   100 |\n\n                                                               \n## EXIT REASON STATS\n                                                                \n\n|                               Exit Reason | Exits | Avg Profit % | Tot Profit USDT | Tot Profit % |    Avg Duration |  Win  Draw  Loss  Win% |\n|-------------------------------------------:|-------:|--------------:|-----------------:|--------------:|-----------------:|------------------------:|\n|              exit_long_normal_d_6_1 ( 5 ) |     1 |         6.57 |         109.169 |         1.09 |         3:20:00 |    1     0     0   100 |\n|       exit_profit_long_tc_t_1_1_m ( 145 ) |     1 |         1.93 |          31.836 |         0.32 |         4:05:00 |    1     0     0   100 |\n|              exit_long_rebuy_3_1_1 ( 64 ) |     1 |         1.21 |           9.995 |          0.1 |  1 day, 9:15:00 |    1     0     0   100 |\n| exit_profit_long_normal_t_0_1_m ( 6 141 ) |     1 |         0.44 |           7.587 |         0.08 | 1 day, 11:55:00 |    1     0     0   100 |\n|     exit_profit_long_rebuy_t_0_1_m ( 64 ) |     2 |         0.65 |           5.350 |         0.05 |         2:50:00 |    2     0     0   100 |\n|                                     TOTAL |     6 |         1.91 |         163.936 |         1.64 |        13:42:00 |    6     0     0   100 |\n\n                                                                       \n## MIXED TAG STATS\n                                                                       \n\n| Enter Tag |                               Exit Reason | Trades | Avg Profit % | Tot Profit USDT | Tot Profit % |    Avg Duration |  Win  Draw  Loss  Win% |\n|-----------:|-------------------------------------------:|--------:|--------------:|-----------------:|--------------:|-----------------:|------------------------:|\n|         5 |              exit_long_normal_d_6_1 ( 5 ) |      1 |         6.57 |         109.169 |         1.09 |         3:20:00 |    1     0     0   100 |\n|       145 |       exit_profit_long_tc_t_1_1_m ( 145 ) |      1 |         1.93 |          31.836 |         0.32 |         4:05:00 |    1     0     0   100 |\n|        64 |              exit_long_rebuy_3_1_1 ( 64 ) |      1 |         1.21 |           9.995 |          0.1 |  1 day, 9:15:00 |    1     0     0   100 |\n|     6 141 | exit_profit_long_normal_t_0_1_m ( 6 141 ) |      1 |         0.44 |           7.587 |         0.08 | 1 day, 11:55:00 |    1     0     0   100 |\n|        64 |     exit_profit_long_rebuy_t_0_1_m ( 64 ) |      2 |         0.65 |           5.350 |         0.05 |         2:50:00 |    2     0     0   100 |\n|     TOTAL |                                           |      6 |         1.91 |         163.936 |         1.64 |        13:42:00 |    6     0     0   100 |\n\n                                  \n## DAY BREAKDOWN\n                                   \n\n|        Day | Trades | Tot Profit USDT | Profit Factor |  Win  Draw  Loss  Win% |\n|------------:|--------:|-----------------:|---------------:|------------------------:|\n| 04/05/2026 |      1 |           2.235 |           0.0 |    1     0     0   100 |\n| 05/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 06/05/2026 |      1 |           3.114 |           0.0 |    1     0     0   100 |\n| 07/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 08/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 09/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 10/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 11/05/2026 |      1 |          31.836 |           0.0 |    1     0     0   100 |\n| 12/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 13/05/2026 |      1 |           9.995 |           0.0 |    1     0     0   100 |\n| 14/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 15/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 16/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 17/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 18/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 19/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 20/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 21/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 22/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 23/05/2026 |      1 |           7.587 |           0.0 |    1     0     0   100 |\n| 24/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 25/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 26/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 27/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 28/05/2026 |      0 |               0 |           0.0 |    0     0     0     0 |\n| 29/05/2026 |      1 |         109.169 |           0.0 |    1     0     0   100 |\n\n                                   \n## SUMMARY METRICS\n                                    \n\n| Metric                                 | Value                                     |\n|----------------------------------------:|-------------------------------------------:|\n| Backtesting from                       | 2026-05-01 00:00:00                       |\n| Backtesting to                         | 2026-06-01 00:00:00                       |\n| Trading Mode                           | Spot                                      |\n| Max open trades                        | 6                                         |\n|                                        |                                           |\n| Total/Daily Avg Trades                 | 6 / 0.19                                  |\n| Starting balance                       | 10000 USDT                                |\n| Final balance                          | 10163.936 USDT                            |\n| Absolute profit                        | 163.936 USDT                              |\n| Total profit %                         | 1.64%                                     |\n| CAGR %                                 | 21.10%                                    |\n| Sharpe (closed trades)                 | 2.66                                      |\n| Sortino (closed trades)                | -100.00                                   |\n| Calmar (closed trades)                 | -100.00                                   |\n| SQN                                    | 1.61                                      |\n| Mean profit p-value                    | 0.168                                     |\n| Profit factor                          | 0.00                                      |\n| Expectancy (Ratio)                     | 27.32 (100.00)                            |\n| Avg. daily profit                      | 5.288 USDT                                |\n| Avg. stake amount                      | 1102.554 USDT                             |\n| Market change                          | -0.40%                                    |\n| Total trade volume                     | 13598.599 USDT                            |\n|                                        |                                           |\n| Best Pair                              | DAG/USDT 1.19%                            |\n| Worst Pair                             | ADA/USDT 0.00%                            |\n| Best trade                             | DAG/USDT 6.57%                            |\n| Worst trade                            | DASH/USDT 0.44%                           |\n| Best day                               | 109.169 USDT                              |\n| Worst day                              | 0 USDT                                    |\n| Days win/draw/lose                     | 6 / 20 / 0                                |\n| Min/Max/Avg. Duration Winners          | 0d 02:25 / 1d 11:55 / 0d 13:42            |\n| Min/Max/Avg. Duration Losers           | 0d 00:00 / 0d 00:00 / 0d 00:00            |\n| Max Consecutive Wins / Loss            | 6 / 0                                     |\n| Rejected Entry signals                 | 0                                         |\n| Entry/Exit Timeouts                    | 0 / 0                                     |\n|                                        |                                           |\n| Min/Max balance (closed trades)        | 10002.235 USDT / 10163.936 USDT           |\n| Max % of account underwater            | 0.00%                                     |\n| Absolute drawdown                      | 0 USDT (0.00%)                            |\n| Drawdown duration                      | 0 days 00:00:00                           |\n| Profit at drawdown start               | 0 USDT                                    |\n| Profit at drawdown end                 | 0 USDT                                    |\n| Drawdown start                         | 2026-05-04 20:40:00                       |\n| Drawdown end                           | 2026-05-04 20:40:00                       |\n|                                        |                                           |\n| Wallet based Metrics                   |                                           |\n| Min/Max balance (wallet balance)       | 9911.401 USDT / 10167.367 USDT            |\n| Min/Max balance dates (wallet balance) | 2026-05-23 08:05:00 / 2026-05-29 18:05:00 |\n| Max % of account underwater (balance)  | 1.76%                                     |\n| Absolute drawdown (wallet balance)     | 177.187 USDT (1.76%)                      |\n| Drawdown duration                      | 12 days 08:20:00                          |\n| Profit at drawdown start               | 88.588 USDT                               |\n| Profit at drawdown end                 | -88.599 USDT                              |\n| Drawdown start                         | 2026-05-10 23:45:00                       |\n| Drawdown end                           | 2026-05-23 08:05:00                       |\n| Sharpe (daily wallet balance)          | 2.77                                      |\n| Sortino (daily wallet balance)         | 3.56                                      |\n| Calmar (daily wallet balance)          | 59.44                                     |\n\n\nBacktested 2026-05-01 00:00:00 -> 2026-06-01 00:00:00 | Max open trades : 6\n                                                             \n## STRATEGY SUMMARY\n                                                              \n\n|               Strategy | Trades | Avg Profit % | Tot Profit USDT | Tot Profit % | Avg Duration |  Win  Draw  Loss  Win% |      Drawdown |\n|------------------------:|--------:|--------------:|-----------------:|--------------:|--------------:|------------------------:|---------------:|\n| NostalgiaForInfinityX8 |      6 |         1.91 |         163.936 |         1.64 |     13:42:00 |    6     0     0   100 | 0 USDT  0.00% |\n</details>",
+        "reactions": {
+          "url": "https://api.github.com/repos/iterativv/NostalgiaForInfinity/comments/202273673/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        }
+      }
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:00:37Z"
+  },
+  "PullRequestReviewCommentEvent": {
+    "id": "15858135435",
+    "type": "PullRequestReviewCommentEvent",
+    "actor": {
+      "id": 192911021,
+      "login": "kkwills13",
+      "display_login": "kkwills13",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/kkwills13",
+      "avatar_url": "https://avatars.githubusercontent.com/u/192911021?"
+    },
+    "repo": {
+      "id": 1202244445,
+      "name": "nocktechnologies/nocklock",
+      "url": "https://api.github.com/repos/nocktechnologies/nocklock"
+    },
+    "payload": {
+      "action": "created",
+      "comment": {
+        "url": "https://api.github.com/repos/nocktechnologies/nocklock/pulls/comments/4115813284",
+        "pull_request_review_id": 5330795725,
+        "id": 4115813284,
+        "node_id": "PRRC_kwDOR6jLXc71UlOk",
+        "diff_hunk": "@@ -0,0 +1,83 @@\n+#!/usr/bin/env bash\n+set -euo pipefail\n+\n+ROOT=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")/../../..\" && pwd)\"\n+PROBE_DIR=\"${ROOT}/docs/probes/n10753\"\n+WORK=\"${TMPDIR:-/tmp}/nocklock-n10753-probe.$$\"\n+OUT=\"${PROBE_DIR}/output.txt\"\n+\n+rm -rf \"${WORK}\"",
+        "path": "docs/probes/n10753/run-probe.sh",
+        "commit_id": "36d9e509421644e80738010e1ac8ed0150a0138a",
+        "original_commit_id": "36d9e509421644e80738010e1ac8ed0150a0138a",
+        "user": {
+          "login": "kkwills13",
+          "id": 192911021,
+          "node_id": "U_kgDOC3-WrQ",
+          "avatar_url": "https://avatars.githubusercontent.com/u/192911021?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/kkwills13",
+          "html_url": "https://github.com/kkwills13",
+          "followers_url": "https://api.github.com/users/kkwills13/followers",
+          "following_url": "https://api.github.com/users/kkwills13/following{/other_user}",
+          "gists_url": "https://api.github.com/users/kkwills13/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/kkwills13/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/kkwills13/subscriptions",
+          "organizations_url": "https://api.github.com/users/kkwills13/orgs",
+          "repos_url": "https://api.github.com/users/kkwills13/repos",
+          "events_url": "https://api.github.com/users/kkwills13/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/kkwills13/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "body": "Fixed in d7fa93e. `docs/probes/n10753/run-probe.sh` now creates its scratch directory with `mktemp -d`, installs cleanup immediately afterward, and no longer removes a predictable PID-derived path before owning it.",
+        "created_at": "2026-09-27T15:01:00Z",
+        "updated_at": "2026-09-27T15:01:00Z",
+        "html_url": "https://github.com/nocktechnologies/nocklock/pull/121#discussion_r4115813284",
+        "pull_request_url": "https://api.github.com/repos/nocktechnologies/nocklock/pulls/121",
+        "_links": {
+          "self": {
+            "href": "https://api.github.com/repos/nocktechnologies/nocklock/pulls/comments/4115813284"
+          },
+          "html": {
+            "href": "https://github.com/nocktechnologies/nocklock/pull/121#discussion_r4115813284"
+          },
+          "pull_request": {
+            "href": "https://api.github.com/repos/nocktechnologies/nocklock/pulls/121"
+          }
+        },
+        "reactions": {
+          "url": "https://api.github.com/repos/nocktechnologies/nocklock/pulls/comments/4115813284/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "in_reply_to_id": 4114464207,
+        "original_position": 9,
+        "position": 1,
+        "subject_type": "line"
+      },
+      "pull_request": {
+        "url": "https://api.github.com/repos/nocktechnologies/nocklock/pulls/121",
+        "id": 4651395022,
+        "number": 121,
+        "head": {
+          "ref": "ash/n10753-claude-code-proxy-swap-r",
+          "sha": "d7fa93ecd0b20b5c17e187b2f460c74cbbabc2f0",
+          "repo": {
+            "id": 1202244445,
+            "url": "https://api.github.com/repos/nocktechnologies/nocklock",
+            "name": "nocklock"
+          }
+        },
+        "base": {
+          "ref": "main",
+          "sha": "63d6fe3b43700a3054b4627da59369b96092fdca",
+          "repo": {
+            "id": 1202244445,
+            "url": "https://api.github.com/repos/nocktechnologies/nocklock",
+            "name": "nocklock"
+          }
+        }
+      }
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:01:00Z",
+    "org": {
+      "id": 268410035,
+      "login": "nocktechnologies",
+      "gravatar_id": "",
+      "url": "https://api.github.com/orgs/nocktechnologies",
+      "avatar_url": "https://avatars.githubusercontent.com/u/268410035?"
+    }
+  },
+  "ForkEvent": {
+    "id": "15858402800",
+    "type": "ForkEvent",
+    "actor": {
+      "id": 673121,
+      "login": "eddelbuettel",
+      "display_login": "eddelbuettel",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/eddelbuettel",
+      "avatar_url": "https://avatars.githubusercontent.com/u/673121?"
+    },
+    "repo": {
+      "id": 499540511,
+      "name": "ericgiunta/Colossus",
+      "url": "https://api.github.com/repos/ericgiunta/Colossus"
+    },
+    "payload": {
+      "action": "forked",
+      "forkee": {
+        "id": 1391006533,
+        "node_id": "R_kgDOUukTRQ",
+        "name": "Colossus",
+        "full_name": "eddelbuettel/Colossus",
+        "private": false,
+        "owner": {
+          "login": "eddelbuettel",
+          "id": 673121,
+          "node_id": "MDQ6VXNlcjY3MzEyMQ==",
+          "avatar_url": "https://avatars.githubusercontent.com/u/673121?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/eddelbuettel",
+          "html_url": "https://github.com/eddelbuettel",
+          "followers_url": "https://api.github.com/users/eddelbuettel/followers",
+          "following_url": "https://api.github.com/users/eddelbuettel/following{/other_user}",
+          "gists_url": "https://api.github.com/users/eddelbuettel/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/eddelbuettel/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/eddelbuettel/subscriptions",
+          "organizations_url": "https://api.github.com/users/eddelbuettel/orgs",
+          "repos_url": "https://api.github.com/users/eddelbuettel/repos",
+          "events_url": "https://api.github.com/users/eddelbuettel/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/eddelbuettel/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "html_url": "https://github.com/eddelbuettel/Colossus",
+        "description": "Stores the R and C++ code being developed for the Colossus R package",
+        "fork": true,
+        "url": "https://api.github.com/repos/eddelbuettel/Colossus",
+        "forks_url": "https://api.github.com/repos/eddelbuettel/Colossus/forks",
+        "keys_url": "https://api.github.com/repos/eddelbuettel/Colossus/keys{/key_id}",
+        "collaborators_url": "https://api.github.com/repos/eddelbuettel/Colossus/collaborators{/collaborator}",
+        "teams_url": "https://api.github.com/repos/eddelbuettel/Colossus/teams",
+        "hooks_url": "https://api.github.com/repos/eddelbuettel/Colossus/hooks",
+        "issue_events_url": "https://api.github.com/repos/eddelbuettel/Colossus/issues/events{/number}",
+        "events_url": "https://api.github.com/repos/eddelbuettel/Colossus/events",
+        "assignees_url": "https://api.github.com/repos/eddelbuettel/Colossus/assignees{/user}",
+        "branches_url": "https://api.github.com/repos/eddelbuettel/Colossus/branches{/branch}",
+        "tags_url": "https://api.github.com/repos/eddelbuettel/Colossus/tags",
+        "blobs_url": "https://api.github.com/repos/eddelbuettel/Colossus/git/blobs{/sha}",
+        "git_tags_url": "https://api.github.com/repos/eddelbuettel/Colossus/git/tags{/sha}",
+        "git_refs_url": "https://api.github.com/repos/eddelbuettel/Colossus/git/refs{/sha}",
+        "trees_url": "https://api.github.com/repos/eddelbuettel/Colossus/git/trees{/sha}",
+        "statuses_url": "https://api.github.com/repos/eddelbuettel/Colossus/statuses/{sha}",
+        "languages_url": "https://api.github.com/repos/eddelbuettel/Colossus/languages",
+        "stargazers_url": "https://api.github.com/repos/eddelbuettel/Colossus/stargazers",
+        "contributors_url": "https://api.github.com/repos/eddelbuettel/Colossus/contributors",
+        "subscribers_url": "https://api.github.com/repos/eddelbuettel/Colossus/subscribers",
+        "subscription_url": "https://api.github.com/repos/eddelbuettel/Colossus/subscription",
+        "commits_url": "https://api.github.com/repos/eddelbuettel/Colossus/commits{/sha}",
+        "git_commits_url": "https://api.github.com/repos/eddelbuettel/Colossus/git/commits{/sha}",
+        "comments_url": "https://api.github.com/repos/eddelbuettel/Colossus/comments{/number}",
+        "issue_comment_url": "https://api.github.com/repos/eddelbuettel/Colossus/issues/comments{/number}",
+        "contents_url": "https://api.github.com/repos/eddelbuettel/Colossus/contents/{+path}",
+        "compare_url": "https://api.github.com/repos/eddelbuettel/Colossus/compare/{base}...{head}",
+        "merges_url": "https://api.github.com/repos/eddelbuettel/Colossus/merges",
+        "archive_url": "https://api.github.com/repos/eddelbuettel/Colossus/{archive_format}{/ref}",
+        "downloads_url": "https://api.github.com/repos/eddelbuettel/Colossus/downloads",
+        "issues_url": "https://api.github.com/repos/eddelbuettel/Colossus/issues{/number}",
+        "pulls_url": "https://api.github.com/repos/eddelbuettel/Colossus/pulls{/number}",
+        "milestones_url": "https://api.github.com/repos/eddelbuettel/Colossus/milestones{/number}",
+        "notifications_url": "https://api.github.com/repos/eddelbuettel/Colossus/notifications{?since,all,participating}",
+        "labels_url": "https://api.github.com/repos/eddelbuettel/Colossus/labels{/name}",
+        "releases_url": "https://api.github.com/repos/eddelbuettel/Colossus/releases{/id}",
+        "deployments_url": "https://api.github.com/repos/eddelbuettel/Colossus/deployments",
+        "created_at": "2026-09-27T15:08:41Z",
+        "updated_at": "2026-09-27T15:10:10Z",
+        "pushed_at": "2026-09-27T15:11:50Z",
+        "git_url": "git://github.com/eddelbuettel/Colossus.git",
+        "ssh_url": "git@github.com:eddelbuettel/Colossus.git",
+        "clone_url": "https://github.com/eddelbuettel/Colossus.git",
+        "svn_url": "https://github.com/eddelbuettel/Colossus",
+        "homepage": "https://ericgiunta.github.io/Colossus/",
+        "size": 100924,
+        "stargazers_count": 1,
+        "watchers_count": 1,
+        "language": null,
+        "has_issues": false,
+        "has_projects": true,
+        "has_downloads": false,
+        "has_wiki": true,
+        "has_pages": false,
+        "has_discussions": false,
+        "forks_count": 0,
+        "mirror_url": null,
+        "archived": false,
+        "disabled": false,
+        "open_issues_count": 0,
+        "license": {
+          "key": "gpl-3.0",
+          "name": "GNU General Public License v3.0",
+          "spdx_id": "GPL-3.0",
+          "url": "https://api.github.com/licenses/gpl-3.0",
+          "node_id": "MDc6TGljZW5zZTk="
+        },
+        "allow_forking": true,
+        "is_template": false,
+        "web_commit_signoff_required": false,
+        "has_pull_requests": true,
+        "pull_request_creation_policy": "all",
+        "topics": [],
+        "visibility": "public",
+        "forks": 0,
+        "open_issues": 0,
+        "watchers": 1,
+        "default_branch": "main"
+      }
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:08:41Z"
+  },
+  "DiscussionEvent": {
+    "id": "15858402803",
+    "type": "DiscussionEvent",
+    "actor": {
+      "id": 70102538,
+      "login": "yassirboudda",
+      "display_login": "yassirboudda",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/yassirboudda",
+      "avatar_url": "https://avatars.githubusercontent.com/u/70102538?"
+    },
+    "repo": {
+      "id": 1390913927,
+      "name": "yassirboudda/dev-notes-lab",
+      "url": "https://api.github.com/repos/yassirboudda/dev-notes-lab"
+    },
+    "payload": {
+      "action": "created",
+      "discussion": {
+        "repository_url": "https://api.github.com/repos/yassirboudda/dev-notes-lab",
+        "category": {
+          "id": 52038510,
+          "node_id": "DIC_kwDOUueph84DGgtu",
+          "repository_id": 1390913927,
+          "emoji": ":pray:",
+          "name": "Q&A",
+          "description": "Ask the community for help",
+          "created_at": "2026-09-27T03:50:53.000-10:00",
+          "updated_at": "2026-09-27T03:50:53.000-10:00",
+          "slug": "q-a",
+          "is_answerable": true
+        },
+        "answer_html_url": "https://github.com/yassirboudda/dev-notes-lab/discussions/169#discussioncomment-18625909",
+        "answer_chosen_at": "2026-09-27T05:08:43.000-10:00",
+        "answer_chosen_by": {
+          "login": "yassirboudda",
+          "id": 70102538,
+          "node_id": "MDQ6VXNlcjcwMTAyNTM4",
+          "avatar_url": "https://avatars.githubusercontent.com/u/70102538?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/yassirboudda",
+          "html_url": "https://github.com/yassirboudda",
+          "followers_url": "https://api.github.com/users/yassirboudda/followers",
+          "following_url": "https://api.github.com/users/yassirboudda/following{/other_user}",
+          "gists_url": "https://api.github.com/users/yassirboudda/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/yassirboudda/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/yassirboudda/subscriptions",
+          "organizations_url": "https://api.github.com/users/yassirboudda/orgs",
+          "repos_url": "https://api.github.com/users/yassirboudda/repos",
+          "events_url": "https://api.github.com/users/yassirboudda/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/yassirboudda/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "html_url": "https://github.com/yassirboudda/dev-notes-lab/discussions/169",
+        "id": 10899666,
+        "node_id": "D_kwDOUueph84AplDS",
+        "number": 169,
+        "title": "Best way to structure the project folder (11)",
+        "user": {
+          "login": "yassirboudda",
+          "id": 70102538,
+          "node_id": "MDQ6VXNlcjcwMTAyNTM4",
+          "avatar_url": "https://avatars.githubusercontent.com/u/70102538?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/yassirboudda",
+          "html_url": "https://github.com/yassirboudda",
+          "followers_url": "https://api.github.com/users/yassirboudda/followers",
+          "following_url": "https://api.github.com/users/yassirboudda/following{/other_user}",
+          "gists_url": "https://api.github.com/users/yassirboudda/gists{/gist_id}",
+          "starred_url": "https://api.github.com/users/yassirboudda/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/yassirboudda/subscriptions",
+          "organizations_url": "https://api.github.com/users/yassirboudda/orgs",
+          "repos_url": "https://api.github.com/users/yassirboudda/repos",
+          "events_url": "https://api.github.com/users/yassirboudda/events{/privacy}",
+          "received_events_url": "https://api.github.com/users/yassirboudda/received_events",
+          "type": "User",
+          "user_view_type": "public",
+          "site_admin": false
+        },
+        "labels": [],
+        "state": "open",
+        "state_reason": null,
+        "locked": false,
+        "comments": 1,
+        "created_at": "2026-09-27T15:08:41Z",
+        "updated_at": "2026-09-27T15:08:43Z",
+        "active_lock_reason": null,
+        "body": "Hi, running into this on my setup (11). Any pointers?",
+        "reactions": {
+          "url": "https://api.github.com/repos/yassirboudda/dev-notes-lab/discussions/169/reactions",
+          "total_count": 0,
+          "+1": 0,
+          "-1": 0,
+          "laugh": 0,
+          "hooray": 0,
+          "confused": 0,
+          "heart": 0,
+          "rocket": 0,
+          "eyes": 0
+        },
+        "timeline_url": "https://api.github.com/repos/yassirboudda/dev-notes-lab/discussions/169/timeline"
+      }
+    },
+    "public": true,
+    "created_at": "2026-09-27T15:08:41Z"
+  },
+  "PublicEvent": {
+    "id": "15858811621",
+    "type": "PublicEvent",
+    "actor": {
+      "id": 31838835,
+      "login": "aandk1024",
+      "display_login": "aandk1024",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/aandk1024",
+      "avatar_url": "https://avatars.githubusercontent.com/u/31838835?"
+    },
+    "repo": {
+      "id": 1391002442,
+      "name": "aandk1024/contrast-audit-lite",
+      "url": "https://api.github.com/repos/aandk1024/contrast-audit-lite"
+    },
+    "payload": {},
+    "public": true,
+    "created_at": "2026-09-27T15:05:39Z"
+  }
+}
