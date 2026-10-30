@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: gharchive
+    description: "Tables built outside dbt (Spark/Glue in Step 3)."
+    database: awsdatacatalog
+    schema: gharchive
+    tables:
+      - name: silver_events
+        description: "One row per public GitHub event, deduplicated, UTC, partitioned by dt."

@@ -1,0 +1,17 @@
+event_type,business_process,description
+PushEvent,push,Push commits to a branch
+CreateEvent,admin_other,Create a branch or tag (or a repository)
+DeleteEvent,admin_other,Delete a branch or tag
+PullRequestEvent,pull_request,Open / merge / close / label a pull request
+PullRequestReviewEvent,pull_request,Submit a review on a pull request
+PullRequestReviewCommentEvent,pull_request,Comment on a line in a pull request diff
+IssuesEvent,issue,Open / close / reopen an issue
+IssueCommentEvent,issue,Comment on an issue or a pull request conversation
+WatchEvent,stars_forks,Star a repository
+ForkEvent,stars_forks,Fork a repository
+ReleaseEvent,release,Publish a release
+MemberEvent,admin_other,Add a collaborator
+PublicEvent,admin_other,Make a private repository public
+GollumEvent,admin_other,Edit the wiki
+CommitCommentEvent,admin_other,Comment on a commit
+DiscussionEvent,admin_other,Create a discussion

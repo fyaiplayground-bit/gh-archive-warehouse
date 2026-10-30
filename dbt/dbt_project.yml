@@ -1,0 +1,21 @@
+name: gharchive
+version: "1.0.0"
+config-version: 2
+profile: gharchive
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  gharchive:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table
+      +table_type: iceberg
+      +s3_data_naming: schema_table_unique
