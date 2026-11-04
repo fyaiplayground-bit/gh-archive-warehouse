@@ -110,15 +110,18 @@ The 2026 PushEvent payload contains only `head`, `before`, `push_id`, `ref`, and
 
 ### `fact_pull_request`: one row per pull request
 
-Type: accumulating snapshot. Primary key: `pull_request_id`. Business key: (`base_repo_id`, `pr_number`).
+Type: accumulating snapshot. Primary key: the business key (`base_repo_id`, `pr_number`), plus a surrogate `pr_sk` (a hash of the two) for joins.
+
+Why not `pull_request_id`: PR conversation comments arrive as IssueCommentEvents, which carry only the repo and `issue.number`, not the PR id. Every PR-related event carries repo + number, so keying on it lets every event attach to its PR directly, with no lookup. This includes PRs whose only event inside the window is a comment. Repo + number maps one-to-one to `pull_request_id` (checked on the sample day: 0 conflicts; enforced as a dbt test).
 
 The grain is **one PR, not one PR event**, so that "opened" and "merged" sit in the same row and durations are a subtraction rather than a self-join. A PR opened before the data window still gets a row, built from the events we do see.
 
 | Column | Description |
 |---|---|
-| `pull_request_id` | Global PR id (`payload.pull_request.id`) |
-| `pr_number` | Number within the repo (shared counter with issues) |
-| `base_repo_sk`, `base_repo_id` | Target repo (role-playing `dim_repo`) |
+| `pr_sk` | Surrogate key: hash of (`base_repo_id`, `pr_number`) |
+| `base_repo_id`, `pr_number` | Business key: target repo + number within the repo (shared counter with issues) |
+| `base_repo_sk` | FK → `dim_repo` (role-playing) |
+| `pull_request_id` | Global PR id (`payload.pull_request.id`); null if only comment events were seen |
 | `head_repo_id` | Source repo; differs from base for PRs from forks |
 | `is_from_fork` | `head_repo_id <> base_repo_id` |
 | `base_ref`, `head_ref` | Target and source branch names |
@@ -138,18 +141,18 @@ The grain is **one PR, not one PR event**, so that "opened" and "merged" sit in 
 | `assign_count`, `reopen_count` | `assigned` / `reopened` actions |
 | `participant_count` | Distinct actors with any event on this PR |
 
-Implementation: dbt incremental model, `unique_key = pull_request_id`. New PRs are inserted; existing PRs are updated when new events arrive.
+Implementation: dbt incremental model on an Iceberg table, `incremental_strategy = merge`, `unique_key = pr_sk`. Each run finds the PRs touched by new events and recomputes those rows from all of their events, then merges them in.
 
 The 2026 PR payload does not include title, author, state, or timestamps, so milestones and the author are derived from the events themselves.
 
 ### `fact_pr_daily_snapshot` (optional): one row per open PR per day
 
-Type: periodic snapshot. Primary key: (`snapshot_date`, `pull_request_id`).
+Type: periodic snapshot. Primary key: (`snapshot_date`, `pr_sk`).
 
 | Column | Description |
 |---|---|
 | `snapshot_date` | FK → `dim_date` |
-| `pull_request_id` | FK → `fact_pull_request` |
+| `pr_sk` | FK → `fact_pull_request` |
 | `base_repo_sk` | FK → `dim_repo` |
 | `age_days` | Days open as of `snapshot_date`; null if opened before the window |
 
@@ -183,7 +186,7 @@ It includes an **unknown member** row (`repo_sk = -1`, `repo_name = 'Unknown'`),
 
 ### `dim_date`
 
-A standard calendar: date, day of week, weekend flag, week, month, quarter, year.
+A standard calendar, one row per day from 2011-01-01 to 2026-12-31, generated in SQL. Primary key `date_day` (not `date`, which is a SQL reserved word); also day of week, weekend flag, week start, month, quarter, year.
 
 ### `dim_event_type`
 
@@ -239,6 +242,7 @@ A standard calendar: date, day of week, weekend flag, week, month, quarter, year
 |---|---|---|
 | One fact table per event type, plus a `dim_event` | Rejected | Events are facts, not dimensions; the model should follow business processes, not the source system's categories. |
 | Only `fact_activity` | Rejected | It can't hold process-specific columns or express a PR's lifecycle across events. |
+| PR primary key = `pull_request_id` | Rejected | IssueCommentEvents don't carry it; comments on PRs with no other event in the window would be dropped. Repo + number is present on every PR-related event. |
 | PR grain = one PR event | Rejected | Durations would need self-joins, and PRs opened before the window would have no anchor row. |
 | SCD Type 2 on `dim_actor` | Rejected | Costly for a rare change; the facts already store the login at event time. |
 | Store "current age" on `fact_pull_request` | Rejected | It rewrites every open row daily and depends on the run date; age is computed at query time, and trends use the periodic snapshot. |
