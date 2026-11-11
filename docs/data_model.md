@@ -130,8 +130,7 @@ The grain is **one PR, not one PR event**, so that "opened" and "merged" sit in 
 | `opened_at_source` | `event`, `snapshot`, or null: where `opened_at` came from (data provenance) |
 | `opened_date`, `merged_date`, `closed_date` | FKs → `dim_date` (role-playing) |
 | `first_event_at`, `last_event_at` | Earliest and latest event seen for this PR (`last_event_at` drives the incremental lookback) |
-| `final_state` | `open`, `merged`, or `closed_unmerged` as of the data end |
-| `is_merged`, `is_closed_unmerged` | 0/1 flags |
+| `final_state` | `open`, `merged`, or `closed_unmerged` as of the data end; count PRs by state with `count_if(final_state = 'merged')` (no separate 0/1 flag columns) |
 | `hours_to_merge` | `merged_at - opened_at`; null unless both observed |
 | `hours_to_close_unmerged` | `closed_at - opened_at` for PRs closed without merge |
 | `is_full_lifecycle` | Opening and ending both observed inside the loaded window |
@@ -163,14 +162,15 @@ This supports aging trends ("how many PRs have been open more than 7 days, day b
 
 ### `dim_actor`: one row per GitHub account
 
-SCD Type 1. Primary key: `actor_id`.
+SCD Type 1. Primary key: `actor_id`. Covers every account **mentioned** in the data: accounts that performed an event, plus PR authors known only from comment snapshots (they performed no event in the window), so every `fact_pull_request.author_actor_id` has a match. Without them, 424 PRs on the sample day (405 authors, 13 of the PRs by bots) would drop out of any "exclude bots" join. Snapshot-only authors are added with an anti-join (`not exists`), so each account appears once and the event login wins.
 
 | Column | Description |
 |---|---|
 | `actor_id` | GitHub user id |
 | `login` | Latest known login |
-| `is_bot` | Rule-based; v1: login ends in `[bot]` |
-| `first_seen_date`, `last_seen_date` | Within the loaded data |
+| `is_bot` | Rule-based; v1: login ends in `[bot]` (false if login is missing) |
+| `first_seen_date`, `last_seen_date` | First / last event within the loaded data; null for snapshot-only accounts |
+| `source` | `event` or `snapshot_only` (how the account entered the dimension) |
 
 ### `dim_repo`: one row per repository version
 
@@ -210,7 +210,7 @@ A standard calendar, one row per day from 2011-01-01 to 2026-12-31, generated in
 |---|---|---|
 | `COUNT(*)` on transaction facts | additive | sum across anything |
 | Review, comment, and label counts | additive | sum |
-| `is_merged`, `is_closed_unmerged` | additive | sum = number of PRs |
+| PRs by `final_state` | additive | `count_if(final_state = …)` = number of PRs |
 | `hours_to_merge` | additive | `SUM / COUNT`, or median, at query time |
 | `participant_count` | **non-additive** | never sum across PRs; distinct contributors per repo come from `fact_activity` |
 | `age_days` in the daily snapshot | **semi-additive** | sum across PRs within one day; never across days |
@@ -235,9 +235,10 @@ A standard calendar, one row per day from 2011-01-01 to 2026-12-31, generated in
 | Empty `repo_name` on some ForkEvents; one ForkEvent with a null `repo_id` (sample day) | Name comes from the repo's other events; a null `repo_id` links to the unknown member (`repo_sk = '-1'`) | `dim_repo`, fact tables |
 | Duplicate event ids | Removed in silver (0 found in the sample day) | silver |
 | PRs opened before the window (75% of PRs seen on the sample day had no `opened` event) | Fill `opened_at` and author from comment snapshots where available (6,267 PRs); `opened_at_source` records which | `int_pr_snapshots`, `fact_pull_request` |
+| PR authors known only from a comment snapshot have no event in the window (424 PRs / 405 authors on the sample day), so they were missing from `dim_actor`; caught by the `relationships` test | Added to `dim_actor` with `source = snapshot_only` and null seen-dates | `dim_actor` |
 | Semantic duplicate pushes: the same push (same `push_id`, ref, head, before, actor, repo, timestamp) recorded as two PushEvents with different `event_id`s (170 of 2,481,416 pushes on the sample day; likely at-least-once delivery upstream) | Keep one row per `push_id` (smallest `event_id`, so reruns pick the same row); found by an idempotency rerun that failed the `fact_push` merge | gold staging (`stg_events`) |
 
-**Planned dbt tests:** `unique` and `not_null` on every primary key (including `fact_push.push_id`); `relationships` from fact FKs to dimensions; accepted values for `final_state`. Volume checks: non-public event count stays small; daily event count within an expected range.
+**dbt tests (implemented in Step 5.7, 67 in total):** `unique` and `not_null` on every primary key (including `fact_push.push_id`); `relationships` from fact FKs to dimensions (`event_type`, `actor_id`, `author_actor_id`, `repo_sk`, `base_repo_sk`, and every date → `dim_date`); `accepted_values` for `final_state`, `opened_at_source`, `event_category`, `business_process`, `dim_actor.source`. Three singular tests: (base repo, number) ↔ `pull_request_id` is one-to-one in both directions; every event with a known `repo_id` falls into exactly one `dim_repo` version (no gaps, no overlaps); the comment snapshot agrees with the `opened` event on author and creation time (severity `warn`: it tests an assumption about the source). Still planned for Step 8: volume checks (non-public event count stays small; daily event count within an expected range).
 
 ## 10. Known limitations
 
