@@ -1,5 +1,6 @@
 -- One row per push (transaction fact, factless: the 2026 payload has no commit count).
 -- Incremental merge on push_id, re-processing the last 2 days.
+-- repo_sk: point-in-time join to dim_repo at pushed_at; no match -> '-1' (unknown member).
 
 {{ config(
     materialized='incremental',
@@ -30,14 +31,19 @@ with pushes as (
 )
 
 select
-    push_id,
-    event_id,
-    pushed_at,
-    actor_id,
-    repo_id,
-    ref,
-    regexp_replace(ref, '^refs/heads/', '')  as branch_name,
-    head_sha,
-    before_sha,
-    push_date
-from pushes
+    p.push_id,
+    p.event_id,
+    p.pushed_at,
+    p.actor_id,
+    p.repo_id,
+    coalesce(d.repo_sk, '-1')                    as repo_sk,
+    p.ref,
+    regexp_replace(p.ref, '^refs/heads/', '')    as branch_name,
+    p.head_sha,
+    p.before_sha,
+    p.push_date
+from pushes p
+left join {{ ref('dim_repo') }} d
+    on  p.repo_id   = d.repo_id
+    and p.pushed_at >= d.valid_from
+    and p.pushed_at <  d.valid_to
