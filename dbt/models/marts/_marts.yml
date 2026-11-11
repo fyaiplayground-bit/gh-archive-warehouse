@@ -1,0 +1,315 @@
+version: 2
+
+models:
+
+  # ---------------------------------------------------------------- dimensions
+
+  - name: dim_event_type
+    description: "One row per GitHub event type and the business process it belongs to. Source of truth: seeds/event_types.csv."
+    columns:
+      - name: event_type
+        description: "GitHub event type, e.g. PullRequestEvent. Primary key."
+        data_tests:
+          - unique
+          - not_null
+      - name: business_process
+        description: "Business process the event type is grouped into (decides which fact table models it)."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['push', 'pull_request', 'issue', 'stars_forks', 'release', 'admin_other']
+      - name: description
+        description: "Plain-English description of the event type."
+
+  - name: dim_date
+    description: "Calendar, one row per day from 2011-01-01 to 2026-12-31, generated in SQL."
+    columns:
+      - name: date_day
+        description: "The calendar day. Primary key (not `date`, a SQL reserved word)."
+        data_tests:
+          - unique
+          - not_null
+      - name: week_start_date
+        description: "Monday of the week."
+      - name: day_of_week
+        description: "1 = Monday ... 7 = Sunday."
+      - name: is_weekend
+        description: "Saturday or Sunday."
+
+  - name: dim_actor
+    description: >
+      One row per GitHub account mentioned in the data (SCD Type 1: latest values). Two sources:
+      accounts that performed an event (source = event), plus PR authors known only from comment
+      snapshots who performed no event in the window (source = snapshot_only), so every
+      fact_pull_request.author_actor_id has a match. The login at the time of each event is kept on
+      the fact tables (actor_login_at_event), so history is available without Type 2.
+    columns:
+      - name: actor_id
+        description: "GitHub user id. Primary key."
+        data_tests:
+          - unique
+          - not_null
+      - name: login
+        description: "Latest login seen (from events; from the latest comment snapshot for snapshot_only accounts)."
+      - name: is_bot
+        description: "Rule-based bot flag; v1: login ends in [bot] (false if login is missing). Kept in gold so the rule is cheap to change."
+        data_tests:
+          - not_null
+      - name: first_seen_date
+        description: "First event date within the loaded data; NULL for snapshot_only accounts (no events seen)."
+      - name: last_seen_date
+        description: "Last event date within the loaded data; NULL for snapshot_only accounts."
+      - name: source
+        description: "How the account entered the dimension: event, or snapshot_only (PR author seen only in a comment snapshot)."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['event', 'snapshot_only']
+
+  - name: dim_repo
+    description: >
+      One row per repository version. SCD Type 2 on organization ownership (org_id), Type 1 on the name.
+      Built from event history by event time (gaps and islands), not dbt snapshot. Half-open intervals
+      [valid_from, valid_to): first version starts 1900-01-01, current version ends 9999-12-31.
+      Includes an unknown-member row (repo_sk = '-1') so fact foreign keys are never null.
+    columns:
+      - name: repo_sk
+        description: "Surrogate key, one per version: md5(repo_id, valid_from); '-1' = unknown member. Primary key."
+        data_tests:
+          - unique
+          - not_null
+      - name: repo_id
+        description: "GitHub repo id (natural key); several rows per repo when ownership changed. -1 on the unknown member."
+        data_tests:
+          - not_null
+      - name: repo_name
+        description: "Latest non-empty owner/name (Type 1: same on every version)."
+      - name: owner_login
+        description: "Part of repo_name before the slash."
+      - name: short_name
+        description: "Part of repo_name after the slash."
+      - name: org_id
+        description: "Owning organization in this version; NULL = personal repo (~91% of events)."
+      - name: org_login
+        description: "Organization login in this version."
+      - name: valid_from
+        description: "Version start (inclusive). 1900-01-01 for the first version: 'this was the state before we could see'."
+        data_tests:
+          - not_null
+      - name: valid_to
+        description: "Version end (exclusive) = next version's valid_from; 9999-12-31 for the current version."
+        data_tests:
+          - not_null
+      - name: is_current
+        description: "True for the version valid now (valid_to = 9999-12-31)."
+        data_tests:
+          - not_null
+      - name: version_num
+        description: "1, 2, ... per repo in time order; 0 on the unknown member."
+
+  # ---------------------------------------------------------------- facts
+
+  - name: fact_activity
+    description: >
+      One row per public event (transaction fact, factless: the measure is COUNT(*)).
+      Incremental merge on event_id with a 2-day lookback; partitioned by event_date.
+      repo_sk points to the dim_repo version valid at event_ts (point-in-time join).
+    columns:
+      - name: event_id
+        description: "GitHub event id; degenerate dimension and primary key."
+        data_tests:
+          - unique
+          - not_null
+      - name: event_ts
+        description: "When the event happened (UTC)."
+        data_tests:
+          - not_null
+      - name: event_type
+        description: "FK -> dim_event_type."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_event_type')
+              field: event_type
+      - name: actor_id
+        description: "FK -> dim_actor."
+        data_tests:
+          - relationships:
+              to: ref('dim_actor')
+              field: actor_id
+      - name: repo_id
+        description: "Natural repo key, for current-state joins (dim_repo where is_current)."
+      - name: repo_sk
+        description: "FK -> dim_repo: the version valid when the event happened; '-1' if no match."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_repo')
+              field: repo_sk
+      - name: action
+        description: "payload.action when present."
+      - name: actor_login_at_event
+        description: "Login as it was when the event happened."
+      - name: repo_name_at_event
+        description: "Repo name as it was when the event happened."
+      - name: event_date
+        description: "FK -> dim_date; partition column."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_day
+
+  - name: fact_push
+    description: >
+      One row per push (transaction fact, factless: the 2026 PushEvent payload has no commit count).
+      Incremental merge on push_id with a 2-day lookback; partitioned by push_date.
+    columns:
+      - name: push_id
+        description: "payload.push_id. Primary key; unique also guards against semantic duplicate pushes."
+        data_tests:
+          - unique
+          - not_null
+      - name: event_id
+        description: "Source PushEvent (the smallest event_id when the push was recorded twice)."
+        data_tests:
+          - not_null
+      - name: pushed_at
+        description: "When the push happened (UTC)."
+      - name: actor_id
+        description: "FK -> dim_actor."
+        data_tests:
+          - relationships:
+              to: ref('dim_actor')
+              field: actor_id
+      - name: repo_id
+        description: "Natural repo key."
+      - name: repo_sk
+        description: "FK -> dim_repo at pushed_at; '-1' if no match."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_repo')
+              field: repo_sk
+      - name: ref
+        description: "Full git ref, e.g. refs/heads/main."
+      - name: branch_name
+        description: "ref without refs/heads/."
+      - name: head_sha
+        description: "Commit after the push."
+      - name: before_sha
+        description: "Commit before the push."
+      - name: push_date
+        description: "FK -> dim_date; partition column."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_day
+
+  - name: fact_pull_request
+    description: >
+      One row per pull request (accumulating snapshot), business key (base_repo_id, pr_number).
+      Milestones come from PR events when seen, otherwise from the comment snapshot (int_pr_snapshots);
+      opened_at_source records which. Incremental merge on pr_sk: PRs touched in the last 2 days are
+      recomputed from all their events. Not partitioned (a PR's dates change as events arrive).
+    columns:
+      - name: pr_sk
+        description: "Surrogate key: md5(base_repo_id, pr_number). Primary key."
+        data_tests:
+          - unique
+          - not_null
+      - name: base_repo_id
+        description: "Target repo (business key, part 1)."
+        data_tests:
+          - not_null
+      - name: base_repo_sk
+        description: "FK -> dim_repo, role-playing: the version valid at opened_at (else first_event_at); '-1' if no match."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_repo')
+              field: repo_sk
+      - name: pr_number
+        description: "Number within the repo (business key, part 2; shared counter with issues)."
+        data_tests:
+          - not_null
+      - name: pull_request_id
+        description: "Global PR id; NULL if only conversation comments were seen."
+      - name: head_repo_id
+        description: "Source repo."
+      - name: head_ref
+        description: "Source branch, latest non-null value seen."
+      - name: base_ref
+        description: "Target branch, latest non-null value seen (can be retargeted, e.g. stacked PRs)."
+      - name: is_from_fork
+        description: "head_repo_id <> base_repo_id; NULL when no branch info was seen."
+      - name: author_actor_id
+        description: "Actor of the opened event, else the author from the comment snapshot; FK -> dim_actor."
+        data_tests:
+          - relationships:
+              to: ref('dim_actor')
+              field: actor_id
+      - name: opened_at
+        description: "opened event time, else snapshot creation time; NULL if neither was seen (censored)."
+      - name: opened_at_source
+        description: "Where opened_at came from: event, snapshot, or NULL (data provenance)."
+        data_tests:
+          - accepted_values:
+              values: ['event', 'snapshot']
+      - name: merged_at
+        description: "merged event time, else snapshot merged_at."
+      - name: closed_at
+        description: "closed event time, else snapshot closed_at."
+      - name: opened_date
+        description: "FK -> dim_date (role-playing)."
+        data_tests:
+          - relationships:
+              to: ref('dim_date')
+              field: date_day
+      - name: merged_date
+        description: "FK -> dim_date (role-playing)."
+        data_tests:
+          - relationships:
+              to: ref('dim_date')
+              field: date_day
+      - name: closed_date
+        description: "FK -> dim_date (role-playing)."
+        data_tests:
+          - relationships:
+              to: ref('dim_date')
+              field: date_day
+      - name: final_state
+        description: "open, merged, or closed_unmerged as of the data end (a reopen after close counts as open)."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['open', 'merged', 'closed_unmerged']
+      - name: hours_to_merge
+        description: "merged_at - opened_at in hours; NULL unless both observed. Aggregate with median, not sum."
+      - name: hours_to_close_unmerged
+        description: "closed_at - opened_at for PRs closed without merge."
+      - name: is_full_lifecycle
+        description: "Opening and an ending (merge or close) both observed."
+      - name: review_count
+        description: "PullRequestReviewEvents (additive)."
+      - name: review_comment_count
+        description: "PullRequestReviewCommentEvents: line comments (additive)."
+      - name: conversation_comment_count
+        description: "IssueCommentEvents on the PR (additive)."
+      - name: label_added_count
+        description: "labeled actions."
+      - name: label_removed_count
+        description: "unlabeled actions."
+      - name: assign_count
+        description: "assigned actions."
+      - name: reopen_count
+        description: "reopened actions."
+      - name: participant_count
+        description: "Distinct actors with any event on this PR, bots included. Non-additive: never sum across PRs."
+      - name: first_event_at
+        description: "Earliest event seen for this PR."
+      - name: last_event_at
+        description: "Latest event seen; drives the incremental lookback."
+        data_tests:
+          - not_null

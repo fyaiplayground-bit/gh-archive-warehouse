@@ -1,0 +1,68 @@
+version: 2
+
+models:
+  - name: int_pr_events
+    description: >
+      One row per pull-request-related event, unified across 4 event types: PullRequestEvent,
+      PullRequestReviewEvent, PullRequestReviewCommentEvent, and IssueCommentEvent on a PR
+      (payload.issue.pull_request present). Every row carries the PR business key
+      (base_repo_id, pr_number) and its surrogate key pr_sk. The raw material for fact_pull_request.
+    columns:
+      - name: pr_sk
+        description: "Surrogate key of the PR: md5(base_repo_id, pr_number), built by macro pr_sk."
+        data_tests:
+          - not_null
+      - name: event_id
+        description: "Source event id."
+        data_tests:
+          - unique
+          - not_null
+      - name: event_category
+        description: "Friendlier name for event_type: pr_action, review, review_comment, conversation_comment."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['pr_action', 'review', 'review_comment', 'conversation_comment']
+      - name: base_repo_id
+        description: "Target repo of the PR (the event's own repo_id)."
+        data_tests:
+          - not_null
+      - name: pr_number
+        description: "PR number within the repo (payload.pull_request.number, or payload.issue.number for comments)."
+        data_tests:
+          - not_null
+      - name: pull_request_id
+        description: "Global PR id. NULL on conversation comments, which don't carry it."
+      - name: head_ref
+        description: "Source branch. NULL on conversation comments."
+      - name: base_ref
+        description: "Target branch. NULL on conversation comments; can change during a PR's life."
+      - name: head_repo_id
+        description: "Source repo; differs from base_repo_id for PRs from forks."
+
+  - name: int_pr_snapshots
+    description: >
+      One row per PR that had at least one conversation comment. IssueCommentEvent payloads carry a
+      full snapshot of the PR's underlying issue record (PullRequestEvent payloads are trimmed in 2026),
+      so this model recovers when a PR was created and by whom, even if it was opened before the data
+      window. Used by fact_pull_request to fill opened_at and the author.
+    columns:
+      - name: pr_sk
+        description: "Surrogate key of the PR, same macro as int_pr_events, so the two join."
+        data_tests:
+          - unique
+          - not_null
+      - name: pr_created_at
+        description: "issue.created_at: when the PR was created. Never changes, so min() across comments."
+        data_tests:
+          - not_null
+      - name: pr_author_id
+        description: "issue.user.id: the PR author."
+      - name: snapshot_merged_at
+        description: "issue.pull_request.merged_at as of the latest comment."
+      - name: snapshot_closed_at
+        description: "issue.closed_at as of the latest comment."
+      - name: snapshot_state
+        description: "issue.state (open / closed) at the latest comment."
+      - name: last_snapshot_at
+        description: "Time of the latest comment carrying a snapshot."
