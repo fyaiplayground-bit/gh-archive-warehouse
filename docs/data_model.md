@@ -124,11 +124,12 @@ The grain is **one PR, not one PR event**, so that "opened" and "merged" sit in 
 | `pull_request_id` | Global PR id (`payload.pull_request.id`); null if only comment events were seen |
 | `head_repo_id` | Source repo; differs from base for PRs from forks |
 | `is_from_fork` | `head_repo_id <> base_repo_id` |
-| `base_ref`, `head_ref` | Target and source branch names |
-| `author_actor_id` | Actor of the `opened` event; null if opened before the window |
-| `opened_at`, `merged_at`, `closed_at` | Milestones from event `created_at` + `action` |
+| `base_ref`, `head_ref` | Target and source branch names, **latest non-null value seen** (the target branch can change during a PR's life, e.g. a stacked PR retargeted to `main`) |
+| `author_actor_id` | Actor of the `opened` event; otherwise the PR author from a comment snapshot; else null |
+| `opened_at`, `merged_at`, `closed_at` | Milestones from event `created_at` + `action`; when the event wasn't seen, from the PR snapshot carried by conversation comments (`issue.created_at`, `issue.pull_request.merged_at`, `issue.closed_at`) |
+| `opened_at_source` | `event`, `snapshot`, or null: where `opened_at` came from (data provenance) |
 | `opened_date`, `merged_date`, `closed_date` | FKs → `dim_date` (role-playing) |
-| `last_event_at` | Latest event seen for this PR |
+| `first_event_at`, `last_event_at` | Earliest and latest event seen for this PR (`last_event_at` drives the incremental lookback) |
 | `final_state` | `open`, `merged`, or `closed_unmerged` as of the data end |
 | `is_merged`, `is_closed_unmerged` | 0/1 flags |
 | `hours_to_merge` | `merged_at - opened_at`; null unless both observed |
@@ -141,7 +142,9 @@ The grain is **one PR, not one PR event**, so that "opened" and "merged" sit in 
 | `assign_count`, `reopen_count` | `assigned` / `reopened` actions |
 | `participant_count` | Distinct actors with any event on this PR |
 
-Implementation: dbt incremental model on an Iceberg table, `incremental_strategy = merge`, `unique_key = pr_sk`. Each run finds the PRs touched by new events and recomputes those rows from all of their events, then merges them in.
+Implementation: `int_pr_events` (one row per PR-related event, 4 event types unified) and `int_pr_snapshots` (one row per PR, from comment snapshots) feed a dbt incremental model on an Iceberg table, `incremental_strategy = merge`, `unique_key = pr_sk`, not partitioned (a PR's dates change as events arrive). Each run finds the PRs touched in the last 2 days and recomputes those rows from all of their events, then merges them in. `pr_sk` comes from one dbt macro so every model computes it identically.
+
+**PR snapshot in comments.** In 2026, PullRequestEvent payloads are trimmed, but IssueCommentEvent payloads carry the full underlying issue record of the PR: creation time, author, state, closed/merged time, title, labels. Verified on the sample day: for all 59 PRs with both an `opened` event and a comment, the snapshot's author and creation time match the event (62/62 event pairs).
 
 The 2026 PR payload does not include title, author, state, or timestamps, so milestones and the author are derived from the events themselves.
 
@@ -182,7 +185,13 @@ SCD Type 2 on organization ownership, Type 1 on everything else. Primary key: `r
 | `org_id`, `org_login` | Owning organization (null for personal repos; ~91% of events) |
 | `valid_from`, `valid_to`, `is_current` | Type 2 validity range |
 
-It includes an **unknown member** row (`repo_sk = -1`, `repo_name = 'Unknown'`), so fact foreign keys are never null and rows never drop out of joins. Implementation: dbt snapshot.
+It includes an **unknown member** row (`repo_sk = '-1'`, `repo_name = 'Unknown'`), so fact foreign keys are never null and rows never drop out of joins.
+
+Implementation: built from event history by **event time**, not dbt snapshot (snapshot stamps processing time and would break on backfills). Gaps and islands: flag `org_id` changes with `lag()` and `is distinct from`, running-sum the flags into a version number, group by version. Intervals are half-open `[valid_from, valid_to)`; the first version starts at 1900-01-01 (so PRs whose `opened_at` comes from a pre-window comment snapshot still find a version) and the current one ends at 9999-12-31. `repo_sk` = md5(`repo_id`, `valid_from`) via the project's `surrogate_key` macro. The exact transfer moment is unknown; a new version starts at its first event.
+
+Sample-day profile: 801,936 repos; 93 changed ownership, each exactly once (no flip-flopping, so a null org means "personal", not missing data). 88 of them look like a personal account converted into an organization (repo owner = new org), 5 went from an org to personal, 0 moved to a different org.
+
+Facts link to it with a point-in-time join (`event_ts >= valid_from and event_ts < valid_to`) and `coalesce(repo_sk, '-1')`: `fact_activity` / `fact_push` at the event time, `fact_pull_request.base_repo_sk` at the PR's opening (`opened_at`, else `first_event_at`). The 2-day incremental lookback re-links recent events if `dim_repo` gains a new version after they were loaded.
 
 ### `dim_date`
 
@@ -223,13 +232,16 @@ A standard calendar, one row per day from 2011-01-01 to 2026-12-31, generated in
 | Bots (e.g. dependabot) skew merge times and contributor rankings | Flag with `is_bot` and keep; reporting decides whether to exclude | `dim_actor` |
 | PRs opened before or still open after the window (censoring) | Keep the row; durations null; `is_full_lifecycle` flag; time-to-merge metrics use cohorts with a fixed follow-up period (e.g. "% merged within 7 days by open month"), excluding immature cohorts | `fact_pull_request` + reporting |
 | Non-public events (17 in the sample day) | Kept in silver; excluded in gold (out of scope) | gold staging |
-| Empty `repo_name` on some ForkEvents | Name comes from the repo's other events; otherwise the unknown member | `dim_repo` |
+| Empty `repo_name` on some ForkEvents; one ForkEvent with a null `repo_id` (sample day) | Name comes from the repo's other events; a null `repo_id` links to the unknown member (`repo_sk = '-1'`) | `dim_repo`, fact tables |
 | Duplicate event ids | Removed in silver (0 found in the sample day) | silver |
+| PRs opened before the window (75% of PRs seen on the sample day had no `opened` event) | Fill `opened_at` and author from comment snapshots where available (6,267 PRs); `opened_at_source` records which | `int_pr_snapshots`, `fact_pull_request` |
+| Semantic duplicate pushes: the same push (same `push_id`, ref, head, before, actor, repo, timestamp) recorded as two PushEvents with different `event_id`s (170 of 2,481,416 pushes on the sample day; likely at-least-once delivery upstream) | Keep one row per `push_id` (smallest `event_id`, so reruns pick the same row); found by an idempotency rerun that failed the `fact_push` merge | gold staging (`stg_events`) |
 
-**Planned dbt tests:** `unique` and `not_null` on every primary key; `relationships` from fact FKs to dimensions; accepted values for `final_state`. Volume checks: non-public event count stays small; daily event count within an expected range.
+**Planned dbt tests:** `unique` and `not_null` on every primary key (including `fact_push.push_id`); `relationships` from fact FKs to dimensions; accepted values for `final_state`. Volume checks: non-public event count stays small; daily event count within an expected range.
 
 ## 10. Known limitations
 
+- **The source feed misses events.** Of the 6,267 PRs whose `opened_at` came from a comment snapshot, 4,941 were created on the sample day itself, yet no `opened` event exists for them: at least 40% of PRs created that day have no `opened` event in GH Archive (cause unconfirmed: a lossy public events feed, or PRs created in ways that don't emit public events). Counting `opened` events undercounts new PRs; count by `opened_at` instead, and treat it as a lower bound. Planned: a completeness check in Step 8.
 - **Censoring is permanent.** Every window has edges. A warm-up period of earlier data fixes most left censoring, and right-censored PRs are reported as "still open," not dropped.
 - **Account-level bot detection only.** A human account running automation (scripts, personal tokens in CI) can't be identified from this data.
 - **The 2026 payloads are trimmed.** There are no PR titles, commit counts, or diff sizes.
@@ -243,6 +255,7 @@ A standard calendar, one row per day from 2011-01-01 to 2026-12-31, generated in
 | One fact table per event type, plus a `dim_event` | Rejected | Events are facts, not dimensions; the model should follow business processes, not the source system's categories. |
 | Only `fact_activity` | Rejected | It can't hold process-specific columns or express a PR's lifecycle across events. |
 | PR primary key = `pull_request_id` | Rejected | IssueCommentEvents don't carry it; comments on PRs with no other event in the window would be dropped. Repo + number is present on every PR-related event. |
+| Comment-only columns on `int_pr_events` | Rejected | Most rows would be null and the table harder to read; the snapshot logic lives in its own model, `int_pr_snapshots`. |
 | PR grain = one PR event | Rejected | Durations would need self-joins, and PRs opened before the window would have no anchor row. |
 | SCD Type 2 on `dim_actor` | Rejected | Costly for a rare change; the facts already store the login at event time. |
 | Store "current age" on `fact_pull_request` | Rejected | It rewrites every open row daily and depends on the run date; age is computed at query time, and trends use the periodic snapshot. |
@@ -253,4 +266,6 @@ A standard calendar, one row per day from 2011-01-01 to 2026-12-31, generated in
 - `fact_issue` (accumulating snapshot, same pattern as PRs)
 - `bridge_pr_label` for the many-to-many relationship between PRs and labels
 - `revision_push_count` on `fact_pull_request`
+- Review outcomes (`approved_count`, `changes_requested_count`) from `review.state`
+- Better bot detection from `user.type`, and automation detection from `performed_via_github_app` (both in comment payloads)
 - Both GH Archive eras (2011–2014 Timeline API vs 2015+ Events API) in Step 7
