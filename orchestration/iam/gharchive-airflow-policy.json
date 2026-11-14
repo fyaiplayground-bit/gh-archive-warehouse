@@ -1,0 +1,39 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "WriteOwnLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:us-east-1:894566155139:log-group:/aws/mwaa-serverless/*"
+    },
+    {
+      "Sid": "ReadWorkflowDefinition",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::fl-gharchive-raw-2026/airflow/*"
+    },
+    {
+      "Sid": "ListBucketForAirflowPrefix",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::fl-gharchive-raw-2026",
+      "Condition": { "StringLike": { "s3:prefix": ["airflow/*"] } }
+    },
+    {
+      "Sid": "RunOnlyTheTransformJob",
+      "Effect": "Allow",
+      "Action": [
+        "glue:GetJob",
+        "glue:StartJobRun",
+        "glue:GetJobRun",
+        "glue:GetJobRuns"
+      ],
+      "Resource": "arn:aws:glue:us-east-1:894566155139:job/gharchive-transform-events"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+# GH Archive daily pipeline — MWAA Serverless (Airflow 3) workflow definition
+# Step 6.1: one task only (Glue raw -> silver). Download (6.3) and dbt (6.5) come later.
+#
+# Date rule:
+#   - manual run with override parameter run_date -> process that date (used for tests / backfill)
+#   - otherwise -> Airflow logical date ({{ ds }}), i.e. "yesterday" once scheduled
+gharchive_daily:
+  description: "GH Archive daily pipeline: raw -> silver (Glue). Step 6.1 minimal version."
+  schedule: null            # manual only for now; daily schedule comes in 6.8
+  catchup: false
+  max_active_runs: 1        # one date at a time (dbt merge must not run in parallel)
+  params:
+    run_date: ""            # override per run, e.g. {"run_date": "2026-09-27"}
+  tasks:
+    transform:
+      task_id: transform
+      operator: airflow.providers.amazon.aws.operators.glue.GlueJobOperator
+      job_name: gharchive-transform-events
+      region_name: us-east-1
+      script_args:
+        "--date": "{{ params.run_date or ds }}"   # --raw-base / --silver-base use the job defaults
+      wait_for_completion: true
+      retries: 0            # fail fast while testing; raise later

@@ -1,0 +1,15 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowAirflowServerlessAssumeRole",
+      "Effect": "Allow",
+      "Principal": { "Service": "airflow-serverless.amazonaws.com" },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": { "aws:SourceAccount": "894566155139" },
+        "ArnLike": { "aws:SourceArn": "arn:aws:airflow-serverless:us-east-1:894566155139:workflow/*" }
+      }
+    }
+  ]
+}
