@@ -1,0 +1,21 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadWriteRawOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "arn:aws:s3:::fl-gharchive-raw-2026/raw/gharchive/*"
+    },
+    {
+      "Sid": "ListBucketSoMissingIs404",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::fl-gharchive-raw-2026"
+    }
+  ]
+}
