@@ -1,0 +1,5 @@
+# Not copied into the image: build output and local leftovers (rebuilt when dbt runs).
+target/
+logs/
+dbt_packages/
+.user.yml

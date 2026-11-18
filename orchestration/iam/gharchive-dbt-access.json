@@ -1,0 +1,33 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "AthenaRunQueries", "Effect": "Allow",
+      "Action": ["athena:StartQueryExecution", "athena:GetQueryExecution", "athena:GetQueryResults",
+                 "athena:StopQueryExecution", "athena:GetWorkGroup"],
+      "Resource": "arn:aws:athena:us-east-1:*:workgroup/gharchive" },
+    { "Sid": "AthenaListCatalogs", "Effect": "Allow",
+      "Action": ["athena:ListDataCatalogs", "athena:GetDataCatalog", "athena:ListWorkGroups"],
+      "Resource": "*" },
+    { "Sid": "GlueCatalog", "Effect": "Allow",
+      "Action": ["glue:GetDatabase", "glue:GetDatabases", "glue:CreateDatabase", "glue:GetTable", "glue:GetTables",
+                 "glue:CreateTable", "glue:UpdateTable", "glue:DeleteTable", "glue:GetPartition", "glue:GetPartitions",
+                 "glue:BatchCreatePartition", "glue:BatchDeletePartition", "glue:GetTableVersions",
+                 "glue:BatchDeleteTableVersion"],
+      "Resource": ["arn:aws:glue:us-east-1:*:catalog", "arn:aws:glue:us-east-1:*:database/default",
+                   "arn:aws:glue:us-east-1:*:database/gharchive", "arn:aws:glue:us-east-1:*:database/gharchive_gold",
+                   "arn:aws:glue:us-east-1:*:database/gharchive_dev",
+                   "arn:aws:glue:us-east-1:*:table/gharchive/*", "arn:aws:glue:us-east-1:*:table/gharchive_gold/*",
+                   "arn:aws:glue:us-east-1:*:table/gharchive_dev/*"] },
+    { "Sid": "S3BucketLevel", "Effect": "Allow",
+      "Action": ["s3:GetBucketLocation", "s3:ListBucketMultipartUploads"],
+      "Resource": "arn:aws:s3:::fl-gharchive-raw-2026" },
+    { "Sid": "S3ListProjectPrefixes", "Effect": "Allow", "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::fl-gharchive-raw-2026",
+      "Condition": { "StringLike": { "s3:prefix": ["silver/*", "gold/*", "athena-results/*", ""] } } },
+    { "Sid": "S3ReadSilver", "Effect": "Allow", "Action": ["s3:GetObject"],
+      "Resource": "arn:aws:s3:::fl-gharchive-raw-2026/silver/*" },
+    { "Sid": "S3ReadWriteGoldAndResults", "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
+      "Resource": ["arn:aws:s3:::fl-gharchive-raw-2026/gold/*", "arn:aws:s3:::fl-gharchive-raw-2026/athena-results/*"] }
+  ]
+}

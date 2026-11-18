@@ -1,0 +1,34 @@
+# dbt connection profiles (Step 6.4). No secrets in this file: dev uses a named AWS CLI
+# profile on the laptop; prod uses whatever role the container runs as (ECS task role).
+#
+# dbt looks for profiles.yml in the current folder first, so running dbt from dbt/
+# (laptop) or /app (container) picks up this file.
+#
+#   dbt build                  -> dev  (laptop, user gharchive-dev, writes gharchive_dev)
+#   dbt build --target prod    -> prod (Fargate, task role,         writes gharchive_gold)
+gharchive:
+  target: dev
+  outputs:
+    dev:
+      type: athena
+      region_name: us-east-1
+      aws_profile_name: gharchive          # laptop only: keys of IAM user gharchive-dev
+      work_group: gharchive
+      database: awsdatacatalog
+      schema: gharchive_dev                # experiments never touch the real gold tables
+      s3_staging_dir: s3://fl-gharchive-raw-2026/athena-results/
+      s3_data_dir: s3://fl-gharchive-raw-2026/gold/
+      s3_data_naming: schema_table
+      threads: 4
+
+    prod:
+      type: athena
+      region_name: us-east-1
+      # no aws_profile_name: credentials come from the ECS task role automatically
+      work_group: gharchive
+      database: awsdatacatalog
+      schema: gharchive_gold
+      s3_staging_dir: s3://fl-gharchive-raw-2026/athena-results/
+      s3_data_dir: s3://fl-gharchive-raw-2026/gold/
+      s3_data_naming: schema_table
+      threads: 4
