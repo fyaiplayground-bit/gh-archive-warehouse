@@ -1,0 +1,29 @@
+{
+  "family": "gharchive-dbt",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "1024",
+  "memory": "2048",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "executionRoleArn": "arn:aws:iam::894566155139:role/gharchive-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::894566155139:role/gharchive-dbt-task-role",
+  "containerDefinitions": [
+    {
+      "name": "dbt",
+      "image": "894566155139.dkr.ecr.us-east-1.amazonaws.com/gharchive-dbt:prod",
+      "essential": true,
+      "command": ["build", "--target", "prod"],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/gharchive-dbt",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "dbt"
+        }
+      }
+    }
+  ]
+}
